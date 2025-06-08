@@ -1,0 +1,13 @@
+model Token {
+  id         String   @id @default(uuid())
+  ownedById  String   @map("owned_by_id")
+  token      String   @db.Text
+  type       String
+  scopes     String
+  deviceName String   @map("device_name")
+  deviceIp   String   @map("device_ip")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  expiresAt  DateTime @map("expires_at")
+  owner      User     @relation(fields: [ownedById], references: [id])
+}

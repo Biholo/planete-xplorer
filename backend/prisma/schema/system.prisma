@@ -1,0 +1,17 @@
+model System {
+  id                String  @id @default(uuid())
+  name              String  @unique
+  mainStar          String? @map("main_star") // nom de l'étoile principale
+  distanceFromEarth Float?  @map("distance_from_earth") // distance à la Terre en années-lumière
+  description       String? @db.Text
+
+  // Relations
+  celestialObjects CelestialObject[]
+
+  // Metadata
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("systems")
+}

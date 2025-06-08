@@ -1,0 +1,33 @@
+model CelestialObject {
+  id              String    @id @default(uuid())
+  name            String    @unique
+  description     String?   @db.Text
+  type            String // planète, exoplanète, lune, astéroïde, comète, étoile
+  radius          Float? // rayon en kilomètres
+  mass            Float? // masse en kilogrammes  
+  distanceFromSun Float?    @map("distance_from_sun") // distance au soleil en UA (unités astronomiques)
+  orbitalPeriod   Float?    @map("orbital_period") // période orbitale en jours
+  rotationPeriod  Float?    @map("rotation_period") // période de rotation en heures
+  temperature     Float?    @map("temperature") // température en Kelvin
+  discoveryDate   DateTime? @map("discovery_date") // date de découverte
+  discoverer      String?   @map("discoverer") // nom du découvreur
+
+  // Relations
+  systemId   String?
+  system     System?  @relation(fields: [systemId], references: [id])
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+  creatorId  String
+  creator    User     @relation(fields: [creatorId], references: [id])
+
+  // Metadata
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Recherches sauvegardées liées
+  savedSearches SavedSearch[]
+  auditLogs     AuditLog[]
+
+  @@map("celestial_objects")
+}

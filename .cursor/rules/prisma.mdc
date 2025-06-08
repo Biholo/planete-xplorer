@@ -1,0 +1,447 @@
+---
+description: Ce guide présente les bonnes pratiques pour l'utilisation de Prisma ORM dans notre application.
+globs: prisma/**/*.prisma, src/config/prisma.ts
+---
+
+# Bonnes Pratiques pour Prisma
+
+## Structure des Schémas
+
+1. **Organisation des Fichiers**
+    - Segmenter les schémas en fichiers par modèle (user.prisma, token.prisma, etc.)
+    - Centraliser la configuration dans un fichier schema.prisma principal
+    - Utiliser le feature `prismaSchemaFolder` pour gérer des schémas multiples
+
+```prisma
+// schema.prisma
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["prismaSchemaFolder"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+```
+
+2. **Structure d'un Modèle**
+    - Commencer par les champs d'identité (id, uuid)
+    - Regrouper les champs liés fonctionnellement
+    - Placer les relations après les attributs
+    - Terminer par les timestamps (createdAt, updatedAt)
+
+```prisma
+// user.prisma
+model User {
+  // Identifiants
+  id            String   @id @default(uuid())
+
+  // Informations personnelles
+  email         String   @unique
+  password      String
+  firstName     String
+  lastName      String
+  phone         String?
+
+  // Préférences
+  language      String   @default("fr")
+  timezone      String   @default("Europe/Paris")
+
+  // Sécurité et permissions
+  roles         String   @default("[\"ROLE_USER\"]")
+  isActive      Boolean  @default(true)
+
+  // Relations
+  posts         Post[]
+  comments      Comment[]
+  tokens        Token[]
+
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+}
+```
+
+## Convention de Nommage
+
+1. **Modèles**
+
+    - Utiliser le singulier et PascalCase (ex: `User`, `Product`, `OrderItem`)
+    - Être descriptif et éviter les abréviations
+
+2. **Champs**
+
+    - Utiliser camelCase pour les noms de champs (ex: `firstName`, `createdAt`)
+    - Être explicite sur le contenu (préférer `userEmail` à `email` pour une clé étrangère)
+    - Utiliser le suffixe `Id` pour les clés étrangères (ex: `userId`, `productId`)
+
+3. **Relations**
+
+    - Nommer les relations en fonction du modèle lié (ex: `user`, `posts`)
+    - Utiliser le pluriel pour les relations many (ex: `comments`, `orderItems`)
+    - Utiliser le singulier pour les relations one-to-one (ex: `profile`, `address`)
+
+4. **Enums**
+    - Utiliser PascalCase pour le nom de l'enum (ex: `UserRole`, `PaymentStatus`)
+    - Utiliser SCREAMING_SNAKE_CASE pour les valeurs (ex: `ADMIN`, `USER`, `PAYMENT_PENDING`)
+
+```prisma
+enum UserRole {
+  ADMIN
+  USER
+  GUEST
+}
+
+model User {
+  id        String   @id @default(uuid())
+  role      UserRole @default(USER)
+  // ...
+}
+```
+
+## Types et Attributs
+
+1. **Types Primaires**
+
+    - Choisir le type le plus approprié pour chaque champ
+    - Utiliser `String` pour les textes courts, `Text` pour les textes longs
+    - Utiliser `Int` pour les nombres entiers, `Float` pour les décimaux
+    - Utiliser `Boolean` pour les drapeaux
+    - Utiliser `DateTime` pour les dates et heures
+    - Utiliser `Json` pour les objets JSON
+
+2. **Attributs**
+    - Utiliser `@id` pour les clés primaires
+    - Utiliser `@unique` pour les champs uniques
+    - Utiliser `@default()` pour les valeurs par défaut
+    - Utiliser `@relation` pour définir les relations
+    - Utiliser `@map` pour mapper à une colonne différente
+    - Utiliser `@@index` pour définir des index
+
+```prisma
+model Product {
+  id          String   @id @default(uuid())
+  sku         String   @unique
+  name        String
+  description String?
+  price       Float
+  stock       Int      @default(0)
+  isActive    Boolean  @default(true)
+  attributes  Json?
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+
+  @@index([categoryId])
+  @@index([name])
+}
+```
+
+## Relations
+
+1. **Types de Relations**
+
+    - One-to-One: Un modèle est lié à un seul autre modèle
+    - One-to-Many: Un modèle est lié à plusieurs autres modèles
+    - Many-to-Many: Plusieurs modèles sont liés à plusieurs autres modèles
+
+2. **One-to-One**
+
+```prisma
+model User {
+  id        String    @id @default(uuid())
+  profile   Profile?
+}
+
+model Profile {
+  id        String    @id @default(uuid())
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id])
+  bio       String?
+  avatar    String?
+}
+```
+
+3. **One-to-Many**
+
+```prisma
+model Category {
+  id        String    @id @default(uuid())
+  name      String
+  products  Product[]
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+}
+```
+
+4. **Many-to-Many**
+
+```prisma
+model Product {
+  id        String      @id @default(uuid())
+  name      String
+  tags      ProductTag[]
+}
+
+model Tag {
+  id        String      @id @default(uuid())
+  name      String
+  products  ProductTag[]
+}
+
+model ProductTag {
+  productId String
+  tagId     String
+  product   Product  @relation(fields: [productId], references: [id])
+  tag       Tag      @relation(fields: [tagId], references: [id])
+
+  @@id([productId, tagId])
+}
+```
+
+## Migrations et Déploiement
+
+1. **Gestion des Migrations**
+    - Créer des migrations pour chaque changement de schéma
+    - Nommer les migrations de manière descriptive
+    - Vérifier les migrations avant de les appliquer
+    - Ne jamais modifier directement les fichiers de migration
+
+```bash
+# Créer une migration
+npx prisma migrate dev --name add_user_preferences
+
+# Appliquer les migrations en production
+npx prisma migrate deploy
+```
+
+2. **Stratégies de Déploiement**
+    - Utiliser des migrations pour les environnements de production
+    - Utiliser prisma db push pour les environnements de développement
+    - Mettre en place un rollback plan pour les migrations critiques
+
+## Configuration de Prisma
+
+1. **Configuration du Client**
+
+```typescript
+// src/config/prisma.ts
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['error'],
+});
+
+export default prisma;
+```
+
+2. **Configuration Avancée**
+
+```typescript
+// Avec gestion des logs et métriques
+import { logger } from '@/utils/logger';
+
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient({
+    log: [
+        {
+            emit: 'event',
+            level: 'query',
+        },
+        {
+            emit: 'event',
+            level: 'error',
+        },
+    ],
+});
+
+// Journaliser les requêtes lentes
+prisma.$on('query', (e) => {
+    if (e.duration > 500) {
+        // Plus de 500ms
+        logger.warn(`Requête lente (${e.duration}ms): ${e.query}`);
+    }
+});
+
+// Journaliser les erreurs
+prisma.$on('error', (e) => {
+    logger.error('Erreur Prisma:', e);
+});
+
+export default prisma;
+```
+
+## Opérations CRUD avec Prisma
+
+1. **Création**
+
+```typescript
+// Créer un enregistrement
+const user = await prisma.user.create({
+    data: {
+        email: 'user@example.com',
+        password: hashedPassword,
+        firstName: 'John',
+        lastName: 'Doe',
+        profile: {
+            create: {
+                bio: 'Developer',
+            },
+        },
+    },
+    include: {
+        profile: true,
+    },
+});
+```
+
+2. **Lecture**
+
+```typescript
+// Trouver un enregistrement unique
+const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { profile: true },
+});
+
+// Trouver plusieurs enregistrements
+const users = await prisma.user.findMany({
+    where: {
+        OR: [{ firstName: { contains: searchTerm } }, { lastName: { contains: searchTerm } }],
+    },
+    orderBy: { createdAt: 'desc' },
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+    include: { profile: true },
+});
+
+// Compter les enregistrements
+const count = await prisma.user.count({
+    where: { isActive: true },
+});
+```
+
+3. **Mise à Jour**
+
+```typescript
+// Mettre à jour un enregistrement
+const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+        lastName: 'Smith',
+        profile: {
+            update: {
+                bio: 'Senior Developer',
+            },
+        },
+    },
+    include: { profile: true },
+});
+
+// Mettre à jour plusieurs enregistrements
+const result = await prisma.product.updateMany({
+    where: { categoryId: categoryId },
+    data: { isActive: false },
+});
+```
+
+4. **Suppression**
+
+```typescript
+// Supprimer un enregistrement
+const user = await prisma.user.delete({
+    where: { id: userId },
+});
+
+// Supprimer plusieurs enregistrements
+const result = await prisma.user.deleteMany({
+    where: { isActive: false },
+});
+```
+
+## Transactions
+
+```typescript
+// Utilisation d'une transaction
+const result = await prisma.$transaction(async (tx) => {
+    // Première opération
+    const order = await tx.order.create({
+        data: {
+            userId: userId,
+            status: 'PENDING',
+        },
+    });
+
+    // Deuxième opération (qui dépend de la première)
+    const items = await tx.orderItem.createMany({
+        data: cartItems.map((item) => ({
+            orderId: order.id,
+            productId: item.productId,
+            quantity: item.quantity,
+            price: item.price,
+        })),
+    });
+
+    // Troisième opération
+    await tx.product.updateMany({
+        where: {
+            id: { in: cartItems.map((item) => item.productId) },
+        },
+        data: {
+            stock: { decrement: 1 },
+        },
+    });
+
+    return { order, itemCount: items.count };
+});
+```
+
+## Bonnes Pratiques
+
+1. **Sécurité**
+
+    - Ne jamais exposer le client Prisma directement aux utilisateurs
+    - Valider les entrées avant d'interroger la base de données
+    - Utiliser des transactions pour les opérations atomiques
+    - Mettre en œuvre une politique de suppression logique pour les données sensibles
+
+2. **Performance**
+
+    - Utiliser select pour limiter les champs récupérés
+    - Utiliser include judicieusement pour éviter les requêtes N+1
+    - Créer des index pour les champs fréquemment consultés
+    - Surveiller les requêtes lentes
+
+3. **Maintenance**
+    - Documenter les schémas avec des commentaires
+    - Effectuer des sauvegardes régulières de la base de données
+    - Versionner les schémas et les migrations
+    - Mettre à jour régulièrement Prisma
+
+## Anti-Patterns à Éviter
+
+1. **Accès Direct à la Base de Données**
+
+    - Toujours passer par des repositories ou des services
+    - Éviter d'utiliser Prisma directement dans les contrôleurs
+
+2. **Requêtes N+1**
+
+    - Éviter de faire des requêtes dans une boucle
+    - Utiliser include pour charger les relations en une seule requête
+
+3. **Migrations Non Testées**
+
+    - Toujours tester les migrations dans un environnement de développement
+    - Prévoir une stratégie de rollback
+
+4. **Absence d'Indexation**
+    - Indexer les champs fréquemment utilisés dans les clauses WHERE
+    - Indexer les clés étrangères

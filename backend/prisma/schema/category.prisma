@@ -1,0 +1,17 @@
+model Category {
+  id          String  @id @default(uuid())
+  name        String  @unique // planète, exoplanète, lune, astéroïde, comète, étoile
+  description String? @db.Text
+  color       String? // code couleur hexadécimal pour l'affichage
+  icon        String? // nom d'icône pour l'interface
+
+  // Relations
+  celestialObjects CelestialObject[]
+
+  // Metadata
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("categories")
+}

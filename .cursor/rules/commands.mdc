@@ -1,0 +1,521 @@
+---
+description: Ce guide présente les bonnes pratiques pour l'implémentation du pattern Command dans notre application selon les principes CQRS.
+globs: src/commands/**/*.ts
+---
+
+# Bonnes Pratiques pour les Commands
+
+## Rôle des Commands
+
+Les commands sont responsables de:
+
+1. Encapsuler une intention de modification d'état du système
+2. Séparer les opérations d'écriture des opérations de lecture (pattern CQRS)
+3. Fournir une structure pour les opérations métier
+4. Faciliter la journalisation et l'audit des modifications
+5. Permettre la validation des opérations avant leur exécution
+
+Ils constituent la partie "C" (Command) du pattern CQRS (Command Query Responsibility Segregation).
+
+## Structure Standard
+
+```typescript
+// Interface de base pour les commands
+export interface Command {
+    type: string;
+    timestamp?: Date;
+    userId?: string;
+    correlationId?: string;
+}
+
+// Exemple de command pour créer un utilisateur
+export interface CreateUserCommand extends Command {
+    type: 'CREATE_USER';
+    payload: {
+        email: string;
+        password: string;
+        firstName: string;
+        lastName: string;
+        role: string;
+    };
+}
+
+// Handler pour la command de création d'utilisateur
+export class CreateUserCommandHandler {
+    constructor(
+        private userRepository: UserRepository,
+        private passwordService: PasswordService
+    ) {}
+
+    async execute(command: CreateUserCommand): Promise<User> {
+        // Validation de la command
+        if (!command.payload.email || !command.payload.password) {
+            throw new ValidationError('Email et mot de passe requis');
+        }
+
+        // Vérification si l'utilisateur existe déjà
+        const existingUser = await this.userRepository.findByEmail(command.payload.email);
+        if (existingUser) {
+            throw new ConflictError('Un utilisateur avec cet email existe déjà');
+        }
+
+        // Hachage du mot de passe
+        const hashedPassword = await this.passwordService.hashPassword(command.payload.password);
+
+        // Création de l'utilisateur
+        const user = await this.userRepository.create({
+            email: command.payload.email,
+            password: hashedPassword,
+            firstName: command.payload.firstName,
+            lastName: command.payload.lastName,
+            role: command.payload.role,
+        });
+
+        // Journalisation de l'opération
+        logger.info(`Utilisateur créé: ${user.id}`, {
+            commandType: command.type,
+            userId: command.userId,
+            targetId: user.id,
+        });
+
+        return user;
+    }
+}
+```
+
+## Organisation des Commands
+
+1. **Séparation des Commands et des Handlers**
+
+    - Définir les commands comme des interfaces ou des classes simples
+    - Implémenter les handlers dans des classes séparées
+    - Nommer les commands de façon explicite selon leur action (CreateUserCommand, UpdateOrderCommand)
+
+2. **Regroupement par Domaine Fonctionnel**
+
+    - Organiser les commands par domaine métier (user, product, order, etc.)
+    - Créer un répertoire par domaine avec ses commands et handlers
+
+```
+src/
+  commands/
+    user/
+      createUser.command.ts
+      updateUser.command.ts
+      deleteUser.command.ts
+    product/
+      createProduct.command.ts
+      updateProduct.command.ts
+    order/
+      createOrder.command.ts
+      updateOrderStatus.command.ts
+```
+
+3. **Index d'Exportation**
+    - Centraliser les exports dans des fichiers index.ts
+    - Faciliter l'importation des commands
+
+```typescript
+// src/commands/user/index.ts
+export * from './createUser.command';
+export * from './updateUser.command';
+export * from './deleteUser.command';
+
+// src/commands/index.ts
+export * from './user';
+export * from './product';
+export * from './order';
+```
+
+## Implémentation des Command Handlers
+
+1. **Principe de Responsabilité Unique**
+
+    - Chaque handler ne doit traiter qu'un seul type de command
+    - Séparer clairement les différentes étapes du traitement
+
+2. **Injection de Dépendances**
+
+    - Injecter les dépendances nécessaires via le constructeur
+    - Utiliser des interfaces pour les dépendances (facilite les tests)
+
+3. **Gestion des Erreurs**
+
+    - Définir des types d'erreurs spécifiques (ValidationError, ConflictError, etc.)
+    - Gérer toutes les erreurs potentielles de manière explicite
+
+4. **Validation**
+
+    - Valider les propriétés de la command au début du handler
+    - Utiliser des validateurs externes comme Zod pour des validations complexes
+
+```typescript
+async execute(command: UpdateUserCommand): Promise<User> {
+    // Validation avec Zod
+    try {
+        updateUserSchema.parse(command.payload);
+    } catch (error) {
+        throw new ValidationError('Données invalides', error.errors);
+    }
+
+    // Vérification si l'utilisateur existe
+    const user = await this.userRepository.findById(command.payload.id);
+    if (!user) {
+        throw new NotFoundError('Utilisateur non trouvé');
+    }
+
+    // Suite du traitement...
+}
+```
+
+## Command Bus
+
+Pour les applications complexes, l'utilisation d'un command bus permet de découpler l'émission des commands de leur traitement.
+
+```typescript
+// Définition du Command Bus
+export interface CommandBus {
+    execute<T extends Command>(command: T): Promise<any>;
+}
+
+// Implémentation simple du Command Bus
+export class SimpleCommandBus implements CommandBus {
+    private handlers = new Map<string, any>();
+
+    registerHandler<T extends Command>(commandType: string, handler: any): void {
+        this.handlers.set(commandType, handler);
+    }
+
+    async execute<T extends Command>(command: T): Promise<any> {
+        const handler = this.handlers.get(command.type);
+        if (!handler) {
+            throw new Error(`No handler registered for command type ${command.type}`);
+        }
+
+        // Enrichissement de la command avec des métadonnées
+        command.timestamp = command.timestamp || new Date();
+        command.correlationId = command.correlationId || uuidv4();
+
+        // Journalisation avant exécution
+        logger.debug(`Executing command: ${command.type}`, {
+            commandType: command.type,
+            correlationId: command.correlationId,
+        });
+
+        try {
+            // Exécution du handler
+            const result = await handler.execute(command);
+            return result;
+        } catch (error) {
+            // Journalisation en cas d'erreur
+            logger.error(`Error executing command: ${command.type}`, {
+                commandType: command.type,
+                correlationId: command.correlationId,
+                error: error.message,
+            });
+            throw error;
+        }
+    }
+}
+
+// Enregistrement des handlers
+const commandBus = new SimpleCommandBus();
+commandBus.registerHandler(
+    'CREATE_USER',
+    new CreateUserCommandHandler(userRepository, passwordService)
+);
+commandBus.registerHandler('UPDATE_USER', new UpdateUserCommandHandler(userRepository));
+
+// Utilisation dans un contrôleur
+class UserController {
+    constructor(private commandBus: CommandBus) {}
+
+    async createUser(req: Request, res: Response): Promise<void> {
+        const command: CreateUserCommand = {
+            type: 'CREATE_USER',
+            userId: req.user?.id,
+            payload: req.body,
+        };
+
+        try {
+            const user = await this.commandBus.execute(command);
+            res.status(201).json({
+                success: true,
+                message: 'Utilisateur créé avec succès',
+                data: user,
+                statusCode: 201,
+            });
+        } catch (error) {
+            // Gestion des erreurs...
+        }
+    }
+}
+```
+
+## Avantages du Pattern Command
+
+1. **Auditabilité**
+
+    - Chaque modification du système est explicitement représentée par une command
+    - Facilite la journalisation et l'audit des actions utilisateur
+
+2. **Découplage**
+
+    - Sépare l'intention (command) de son exécution (handler)
+    - Permet des implémentations alternatives des handlers
+
+3. **Testabilité**
+
+    - Les commands et handlers sont faciles à tester unitairement
+    - Possibilité de mocker les dépendances des handlers
+
+4. **Évolutivité**
+    - Facilite l'ajout de fonctionnalités comme la file d'attente, la validation, l'autorisation
+
+## Transactions et Idempotence
+
+1. **Transactions**
+
+```typescript
+async execute(command: CreateOrderCommand): Promise<Order> {
+    return prisma.$transaction(async (tx) => {
+        // Création de la commande
+        const order = await tx.order.create({
+            data: {
+                userId: command.payload.userId,
+                status: 'PENDING',
+            },
+        });
+
+        // Création des items de la commande
+        await tx.orderItem.createMany({
+            data: command.payload.items.map((item) => ({
+                orderId: order.id,
+                productId: item.productId,
+                quantity: item.quantity,
+                price: item.price,
+            })),
+        });
+
+        // Mise à jour des stocks
+        for (const item of command.payload.items) {
+            await tx.product.update({
+                where: { id: item.productId },
+                data: {
+                    stock: { decrement: item.quantity },
+                },
+            });
+        }
+
+        return order;
+    });
+}
+```
+
+2. **Idempotence**
+
+```typescript
+async execute(command: ProcessPaymentCommand): Promise<Payment> {
+    // Vérifier si la commande a déjà été traitée (idempotence)
+    const existingPayment = await this.paymentRepository.findByTransactionId(
+        command.payload.transactionId
+    );
+
+    if (existingPayment) {
+        logger.info(`Paiement déjà traité: ${existingPayment.id}`);
+        return existingPayment;
+    }
+
+    // Traitement du paiement...
+    const payment = await this.paymentService.processPayment(command.payload);
+
+    // Enregistrement du paiement
+    return this.paymentRepository.create({
+        transactionId: command.payload.transactionId,
+        orderId: command.payload.orderId,
+        amount: command.payload.amount,
+        status: payment.status,
+    });
+}
+```
+
+## Intégration avec CQRS
+
+Les commands font partie du pattern CQRS, qui sépare les opérations de lecture (Queries) des opérations d'écriture (Commands).
+
+```typescript
+// Structure du service suivant CQRS
+export class UserService {
+    constructor(
+        private commandBus: CommandBus,
+        private queryBus: QueryBus
+    ) {}
+
+    // Opérations d'écriture (Commands)
+    async createUser(userData: CreateUserDto): Promise<User> {
+        const command: CreateUserCommand = {
+            type: 'CREATE_USER',
+            payload: userData,
+        };
+        return this.commandBus.execute(command);
+    }
+
+    async updateUser(id: string, userData: UpdateUserDto): Promise<User> {
+        const command: UpdateUserCommand = {
+            type: 'UPDATE_USER',
+            payload: { id, ...userData },
+        };
+        return this.commandBus.execute(command);
+    }
+
+    // Opérations de lecture (Queries)
+    async getUserById(id: string): Promise<User> {
+        const query: GetUserByIdQuery = {
+            type: 'GET_USER_BY_ID',
+            payload: { id },
+        };
+        return this.queryBus.execute(query);
+    }
+
+    async getAllUsers(filters: UserFilters): Promise<User[]> {
+        const query: GetAllUsersQuery = {
+            type: 'GET_ALL_USERS',
+            payload: filters,
+        };
+        return this.queryBus.execute(query);
+    }
+}
+```
+
+## Bonnes Pratiques
+
+1. **Nommage Clair**
+
+    - Utiliser des noms explicites pour les commands (CreateUserCommand, UpdateOrderStatusCommand)
+    - Les noms doivent refléter l'intention et le résultat de l'action
+
+2. **Immutabilité**
+
+    - Traiter les commands comme des objets immuables
+    - Ne pas modifier les propriétés d'une command après sa création
+
+3. **Validation Complète**
+
+    - Valider toutes les propriétés requises d'une command
+    - Effectuer des validations métier avant d'exécuter les actions
+
+4. **Gestion des Erreurs**
+
+    - Définir une hiérarchie d'erreurs claire (ValidationError, NotFoundError, etc.)
+    - Fournir des messages d'erreur informatifs et précis
+
+5. **Tests**
+
+    - Tester chaque handler de command avec différents scénarios
+    - Simuler les succès et les échecs des dépendances (repositories, services)
+
+```typescript
+// Exemple de test pour un command handler
+describe('CreateUserCommandHandler', () => {
+    let handler: CreateUserCommandHandler;
+    let userRepository: jest.Mocked<UserRepository>;
+    let passwordService: jest.Mocked<PasswordService>;
+
+    beforeEach(() => {
+        userRepository = {
+            findByEmail: jest.fn(),
+            create: jest.fn(),
+        } as any;
+
+        passwordService = {
+            hashPassword: jest.fn(),
+        } as any;
+
+        handler = new CreateUserCommandHandler(userRepository, passwordService);
+    });
+
+    it('should create a user successfully', async () => {
+        // Arrange
+        const command: CreateUserCommand = {
+            type: 'CREATE_USER',
+            payload: {
+                email: 'test@example.com',
+                password: 'password123',
+                firstName: 'John',
+                lastName: 'Doe',
+                role: 'USER',
+            },
+        };
+
+        userRepository.findByEmail.mockResolvedValue(null);
+        passwordService.hashPassword.mockResolvedValue('hashed_password');
+        userRepository.create.mockResolvedValue({
+            id: '123',
+            ...command.payload,
+            password: 'hashed_password',
+        });
+
+        // Act
+        const result = await handler.execute(command);
+
+        // Assert
+        expect(userRepository.findByEmail).toHaveBeenCalledWith('test@example.com');
+        expect(passwordService.hashPassword).toHaveBeenCalledWith('password123');
+        expect(userRepository.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                email: 'test@example.com',
+                password: 'hashed_password',
+            })
+        );
+        expect(result.id).toBe('123');
+    });
+
+    it('should throw error if user already exists', async () => {
+        // Arrange
+        const command: CreateUserCommand = {
+            type: 'CREATE_USER',
+            payload: {
+                email: 'existing@example.com',
+                password: 'password123',
+                firstName: 'John',
+                lastName: 'Doe',
+                role: 'USER',
+            },
+        };
+
+        userRepository.findByEmail.mockResolvedValue({
+            id: '456',
+            email: 'existing@example.com',
+        } as any);
+
+        // Act & Assert
+        await expect(handler.execute(command)).rejects.toThrow(ConflictError);
+    });
+});
+```
+
+## Anti-Patterns à Éviter
+
+1. **Commands Trop Complexes**
+
+    - Éviter les commands avec trop de propriétés ou de logique
+    - Décomposer les commands complexes en plusieurs plus simples
+
+2. **Logique Métier dans les Commands**
+
+    - Placer la logique métier dans les handlers, pas dans les commands
+    - Les commands doivent être de simples structures de données
+
+3. **Absence de Validation**
+
+    - Toujours valider les commands avant de les exécuter
+    - Ne pas supposer que les données sont correctes
+
+4. **État Partagé entre Commands**
+
+    - Éviter les dépendances entre commands
+    - Chaque command doit être autonome et cohérente
+
+5. **Traitement Synchrone Lourd**
+    - Éviter les traitements longs et bloquants dans les handlers
+    - Envisager une file d'attente pour les opérations longues

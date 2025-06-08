@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 2%;
+    --foreground: 0 0% 78%;
+    --card: 210 40% 8%;
+    --card-foreground: 0 0% 78%;
+    --popover: 210 40% 8%;
+    --popover-foreground: 0 0% 78%;
+    --primary: 180 66% 51%;
+    --primary-foreground: 210 40% 2%;
+    --secondary: 210 40% 12%;
+    --secondary-foreground: 0 0% 78%;
+    --muted: 210 40% 12%;
+    --muted-foreground: 0 0% 60%;
+    --accent: 180 100% 70%;
+    --accent-foreground: 210 40% 2%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 210 40% 18%;
+    --input: 210 40% 18%;
+    --ring: 180 66% 51%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-space-black text-stellar-white font-inter;
+    font-family: Inter, sans-serif;
+    background-image: radial-gradient(2px 2px at 20px 30px, #66fcf1, transparent),
+      radial-gradient(2px 2px at 40px 70px, rgba(255, 255, 255, 0.3), transparent),
+      radial-gradient(1px 1px at 90px 40px, #45a29e, transparent),
+      radial-gradient(1px 1px at 130px 80px, rgba(255, 255, 255, 0.3), transparent),
+      radial-gradient(2px 2px at 160px 30px, #66fcf1, transparent);
+    background-repeat: repeat;
+    background-size: 200px 100px;
+    animation: twinkle 6s ease-in-out infinite alternate;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-orbitron;
+    font-family: Orbitron, sans-serif;
+  }
+}
+
+@layer components {
+  .cosmic-card {
+    @apply bg-nebula-blue/80 backdrop-blur-sm border border-electric-blue/30 rounded-lg;
+    box-shadow: 0 0 20px rgba(102, 252, 241, 0.1);
+    transition: all 0.3s ease;
+  }
+
+  .cosmic-card:hover {
+    @apply border-stellar-cyan/60;
+    box-shadow: 0 0 30px rgba(102, 252, 241, 0.3);
+    transform: translateY(-2px);
+  }
+
+  .cosmic-button {
+    @apply bg-gradient-to-r from-electric-blue to-stellar-cyan text-space-black font-semibold px-6 py-2 rounded-lg;
+    box-shadow: 0 0 15px rgba(102, 252, 241, 0.3);
+    transition: all 0.3s ease;
+  }
+
+  .cosmic-button:hover {
+    box-shadow: 0 0 25px rgba(102, 252, 241, 0.5);
+    transform: translateY(-1px);
+  }
+
+  .cosmic-input {
+    @apply bg-nebula-blue/50 border border-electric-blue/30 rounded-lg px-4 py-2 text-stellar-white;
+    transition: all 0.3s ease;
+  }
+
+  .cosmic-input:focus {
+    @apply border-stellar-cyan outline-none;
+    box-shadow: 0 0 10px rgba(102, 252, 241, 0.4);
+  }
+
+  .star-field::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: radial-gradient(2px 2px at 20px 30px, #66fcf1, transparent),
+      radial-gradient(2px 2px at 40px 70px, rgba(255, 255, 255, 0.3), transparent),
+      radial-gradient(1px 1px at 90px 40px, #45a29e, transparent);
+    background-repeat: repeat;
+    background-size: 200px 100px;
+    animation: twinkle 4s ease-in-out infinite alternate;
+    pointer-events: none;
+    z-index: -1;
+  }
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}

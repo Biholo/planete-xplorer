@@ -1,0 +1,453 @@
+---
+description: Ce guide présente les bonnes pratiques pour les repositories dans notre application, servant de couche d'abstraction pour l'accès aux données.
+globs: src/repositories/**/*.ts
+---
+
+# Bonnes Pratiques pour les Repositories
+
+## Rôle des Repositories
+
+Les repositories sont responsables de:
+
+1. Isoler la logique d'accès aux données du reste de l'application
+2. Fournir une interface cohérente pour les opérations CRUD
+3. Abstraire les détails de l'implémentation de la base de données
+4. Centraliser les requêtes complexes et spécialisées
+
+Ils servent de pont entre la couche de service et la couche de persistance des données.
+
+## Structure Standard
+
+### Repository de Base
+
+```typescript
+import prisma from '@/config/prisma';
+import { FilterService } from '@/services/filterService';
+
+export abstract class BaseRepository<T> {
+    constructor(protected modelClient: any) {}
+
+    async findAll(
+        filters: any = {},
+        skip: number = 0,
+        take: number = 10
+    ): Promise<{ data: T[]; total: number; pages: number }> {
+        const where = FilterService.buildQuery(filters);
+
+        const [data, total] = await Promise.all([
+            this.modelClient.findMany({
+                where,
+                skip,
+                take,
+                orderBy: { createdAt: 'desc' },
+            }),
+            this.modelClient.count({ where }),
+        ]);
+
+        return {
+            data,
+            total,
+            pages: Math.ceil(total / take),
+        };
+    }
+
+    async findById(id: string): Promise<T | null> {
+        return this.modelClient.findUnique({
+            where: { id },
+        });
+    }
+
+    async findOne(where: any): Promise<T | null> {
+        return this.modelClient.findFirst({
+            where,
+        });
+    }
+
+    async create(data: any): Promise<T> {
+        return this.modelClient.create({
+            data,
+        });
+    }
+
+    async update(id: string, data: any): Promise<T> {
+        return this.modelClient.update({
+            where: { id },
+            data,
+        });
+    }
+
+    async delete(id: string): Promise<T> {
+        return this.modelClient.delete({
+            where: { id },
+        });
+    }
+
+    // Méthodes supplémentaires selon les besoins...
+}
+```
+
+### Repository Spécifique
+
+```typescript
+import prisma from '@/config/prisma';
+import { User } from '@shared/types';
+
+import { BaseRepository } from './baseRepository';
+
+class UserRepository extends BaseRepository<User> {
+    constructor() {
+        super(prisma.user);
+    }
+
+    // Méthodes spécifiques au repository d'utilisateurs
+    async findByEmail(email: string): Promise<User | null> {
+        return this.modelClient.findUnique({
+            where: { email },
+        });
+    }
+
+    async findWithProfile(id: string): Promise<User | null> {
+        return this.modelClient.findUnique({
+            where: { id },
+            include: { profile: true },
+        });
+    }
+
+    async updatePassword(id: string, hashedPassword: string): Promise<User> {
+        return this.modelClient.update({
+            where: { id },
+            data: { password: hashedPassword },
+        });
+    }
+}
+
+export const userRepository = new UserRepository();
+```
+
+## Organisation des Repositories
+
+1. **Repository de Base**
+
+    - Implémenter les opérations CRUD communes
+    - Utiliser des génériques pour le typage
+    - Fournir des méthodes pour la pagination et le filtrage
+
+2. **Repositories Spécifiques**
+
+    - Hériter du repository de base
+    - Implémenter des méthodes spécifiques à l'entité
+    - Utiliser le pattern singleton
+
+3. **Index d'Exportation**
+    - Centraliser les exports dans un fichier index.ts
+    - Faciliter l'importation des repositories
+
+```typescript
+// src/repositories/index.ts
+export * from './userRepository';
+export * from './productRepository';
+export * from './orderRepository';
+// ...etc
+```
+
+## Implémentation des Méthodes CRUD
+
+1. **Create (Création)**
+
+```typescript
+async create(data: CreateUserDto): Promise<User> {
+    // Validation ou transformation des données si nécessaire
+    return this.modelClient.create({
+        data,
+        include: { profile: true }  // Inclusion des relations si nécessaire
+    });
+}
+
+async createMany(data: CreateUserDto[]): Promise<number> {
+    const result = await this.modelClient.createMany({
+        data,
+        skipDuplicates: true  // Option pour ignorer les duplications
+    });
+    return result.count;
+}
+```
+
+2. **Read (Lecture)**
+
+```typescript
+// Trouver par ID
+async findById(id: string): Promise<User | null> {
+    return this.modelClient.findUnique({
+        where: { id },
+        include: { profile: true }
+    });
+}
+
+// Trouver par critères
+async findMany(
+    criteria: any,
+    pagination: { page: number; limit: number },
+    sort: { field: string; order: 'asc' | 'desc' } = { field: 'createdAt', order: 'desc' }
+): Promise<{ data: User[]; total: number; pages: number }> {
+    const { page, limit } = pagination;
+    const skip = (page - 1) * limit;
+
+    const where = this.buildWhereClause(criteria);
+    const orderBy = { [sort.field]: sort.order };
+
+    const [data, total] = await Promise.all([
+        this.modelClient.findMany({
+            where,
+            skip,
+            take: limit,
+            orderBy,
+            include: { profile: true }
+        }),
+        this.modelClient.count({ where })
+    ]);
+
+    return {
+        data,
+        total,
+        pages: Math.ceil(total / limit)
+    };
+}
+
+// Méthode utilitaire pour construire la clause WHERE
+private buildWhereClause(criteria: any): any {
+    const where: any = {};
+
+    if (criteria.search) {
+        where.OR = [
+            { firstName: { contains: criteria.search } },
+            { lastName: { contains: criteria.search } },
+            { email: { contains: criteria.search } }
+        ];
+    }
+
+    if (criteria.active !== undefined) {
+        where.isActive = criteria.active;
+    }
+
+    // Ajouter d'autres critères selon les besoins
+
+    return where;
+}
+```
+
+3. **Update (Mise à jour)**
+
+```typescript
+async update(id: string, data: UpdateUserDto): Promise<User> {
+    return this.modelClient.update({
+        where: { id },
+        data,
+        include: { profile: true }
+    });
+}
+
+async updateMany(where: any, data: Partial<User>): Promise<number> {
+    const result = await this.modelClient.updateMany({
+        where,
+        data
+    });
+    return result.count;
+}
+```
+
+4. **Delete (Suppression)**
+
+```typescript
+async delete(id: string): Promise<User> {
+    return this.modelClient.delete({
+        where: { id }
+    });
+}
+
+async deleteMany(where: any): Promise<number> {
+    const result = await this.modelClient.deleteMany({
+        where
+    });
+    return result.count;
+}
+
+// Suppression logique
+async softDelete(id: string): Promise<User> {
+    return this.modelClient.update({
+        where: { id },
+        data: { deletedAt: new Date() }
+    });
+}
+```
+
+## Patterns Avancés
+
+1. **Repository avec Soft Delete**
+
+```typescript
+abstract class SoftDeleteRepository<T> extends BaseRepository<T> {
+    protected hasSoftDelete = true;
+
+    async findAll(
+        filters: any = {},
+        skip: number = 0,
+        take: number = 10
+    ): Promise<{ data: T[]; total: number; pages: number }> {
+        const where = { ...FilterService.buildQuery(filters), deletedAt: null };
+
+        const [data, total] = await Promise.all([
+            this.modelClient.findMany({
+                where,
+                skip,
+                take,
+                orderBy: { createdAt: 'desc' },
+            }),
+            this.modelClient.count({ where }),
+        ]);
+
+        return {
+            data,
+            total,
+            pages: Math.ceil(total / take),
+        };
+    }
+
+    async findById(id: string): Promise<T | null> {
+        return this.modelClient.findFirst({
+            where: { id, deletedAt: null },
+        });
+    }
+
+    async delete(id: string): Promise<T> {
+        return this.modelClient.update({
+            where: { id },
+            data: { deletedAt: new Date() },
+        });
+    }
+
+    async hardDelete(id: string): Promise<T> {
+        return this.modelClient.delete({
+            where: { id },
+        });
+    }
+
+    async restore(id: string): Promise<T> {
+        return this.modelClient.update({
+            where: { id },
+            data: { deletedAt: null },
+        });
+    }
+}
+```
+
+2. **Utilisation des Transactions**
+
+```typescript
+class OrderRepository extends BaseRepository<Order> {
+    constructor() {
+        super(prisma.order);
+    }
+
+    async createOrderWithItems(
+        orderData: CreateOrderDto,
+        items: CreateOrderItemDto[]
+    ): Promise<Order> {
+        return prisma.$transaction(async (tx) => {
+            // Créer la commande
+            const order = await tx.order.create({
+                data: {
+                    userId: orderData.userId,
+                    status: orderData.status,
+                    shippingAddress: orderData.shippingAddress,
+                },
+            });
+
+            // Créer les éléments de la commande
+            await tx.orderItem.createMany({
+                data: items.map((item) => ({
+                    orderId: order.id,
+                    productId: item.productId,
+                    quantity: item.quantity,
+                    price: item.price,
+                })),
+            });
+
+            // Mettre à jour les stocks de produits
+            for (const item of items) {
+                await tx.product.update({
+                    where: { id: item.productId },
+                    data: {
+                        stock: {
+                            decrement: item.quantity,
+                        },
+                    },
+                });
+            }
+
+            // Retourner la commande avec ses éléments
+            return tx.order.findUnique({
+                where: { id: order.id },
+                include: { items: true },
+            });
+        });
+    }
+}
+```
+
+## Bonnes Pratiques
+
+1. **Abstraction**
+
+    - Masquer les détails d'implémentation de l'ORM
+    - Fournir une interface cohérente pour l'accès aux données
+    - Permettre de changer l'ORM sans impacter le reste de l'application
+
+2. **Séparation des Préoccupations**
+
+    - Les repositories ne doivent contenir que la logique d'accès aux données
+    - Déléguer la logique métier aux services
+    - Éviter d'appeler directement les repositories dans les controllers
+
+3. **Réutilisation**
+
+    - Utiliser un repository de base pour les fonctionnalités communes
+    - Implémenter des méthodes spécifiques pour les besoins particuliers
+    - Éviter la duplication de code entre repositories
+
+4. **Performance**
+
+    - Optimiser les requêtes pour éviter les problèmes N+1
+    - Utiliser judicieusement les inclusions de relations
+    - Paginer les résultats pour les grandes collections
+    - Utiliser des transactions pour les opérations atomiques
+
+5. **Tests**
+    - Tester toutes les méthodes du repository
+    - Utiliser des mocks pour isoler les tests
+    - Tester les cas limites et les erreurs
+
+## Anti-Patterns à Éviter
+
+1. **Repository Anémique**
+
+    - Un repository qui n'offre que des méthodes CRUD de base sans valeur ajoutée
+    - Solution: Ajouter des méthodes spécifiques métier
+
+2. **Fat Repository**
+
+    - Un repository qui contient de la logique métier
+    - Solution: Déplacer la logique métier vers les services
+
+3. **Exposition de l'ORM**
+
+    - Exposer les détails de l'ORM ou retourner des objets spécifiques à l'ORM
+    - Solution: Mapper les résultats vers des DTOs ou des entités métier
+
+4. **Accès Direct à l'ORM**
+
+    - Contourner les repositories pour accéder directement à l'ORM
+    - Solution: Toujours passer par les repositories
+
+5. **Duplications**
+    - Répéter la même logique de requête dans plusieurs repositories
+    - Solution: Utiliser l'héritage ou des méthodes utilitaires partagées

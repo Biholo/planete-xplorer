@@ -1,0 +1,580 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: Ce guide présente les bonnes pratiques pour les contrôleurs qui gèrent les requêtes HTTP et coordonnent les réponses de l'API.
+globs: src/controllers/**/*.ts
+---
+
+# Bonnes Pratiques pour les Controllers
+
+## Rôle des Controllers
+
+Les controllers sont responsables de:
+
+1. Recevoir et traiter les requêtes HTTP entrantes
+2. Extraire et valider les données des requêtes
+3. Déléguer la logique métier aux services appropriés
+4. Formater et renvoyer les réponses HTTP
+5. Gérer les erreurs et les exceptions
+
+Ils servent de point d'entrée à l'API et orchestrent le flux d'une requête à travers l'application.
+
+## Structure Standard
+
+```typescript
+import { someService } from '@/services';
+import { asyncHandler } from '@/utils/asyncHandler';
+import { jsonResponse } from '@/utils/jsonResponse';
+import { logger } from '@/utils/logger';
+import { createSomeSchema, updateSomeSchema } from '@/validators/someValidator';
+
+import { FastifyReply, FastifyRequest } from 'fastify';
+
+class SomeController {
+    /**
+     * Récupère toutes les entités avec pagination et filtrage
+     */
+    public getAll = asyncHandler<unknown, unknown, QueryParams>({
+        querySchema: getSomeQuerySchema,
+        handler: async (request: FastifyRequest, reply: FastifyReply) => {
+            try {
+                // Extraction des paramètres
+                const { page = 1, limit = 10, search } = request.query;
+
+                // Appel au service
+                const result = await someService.findAll(
+                    { search, searchFields: ['field1', 'field2'] },
+                    (Number(page) - 1) * Number(limit),
+                    Number(limit)
+                );
+
+                // Réponse formatée
+                return jsonResponse(
+                    reply,
+                    'Données récupérées avec succès',
+                    {
+                        items: result.data,
+                        pagination: {
+                            page: Number(page),
+                            limit: Number(limit),
+                            total: result.total,
+                            pages: result.pages,
+                        },
+                    },
+                    200
+                );
+            } catch (error) {
+                // Gestion d'erreur
+                logger.error('Erreur dans getAll:', error);
+                return jsonResponse(reply, 'Erreur lors de la récupération des données', {}, 500);
+            }
+        },
+    });
+
+    /**
+     * Récupère une entité par son ID
+     */
+    public getById = asyncHandler<{ id: string }, unknown, unknown>({
+        paramsSchema: getByIdSchema,
+        handler: async (request: FastifyRequest, reply: FastifyReply) => {
+            try {
+                const { id } = request.params as { id: string };
+
+                const entity = await someService.findById(id);
+
+                if (!entity) {
+                    return jsonResponse(reply, 'Entité non trouvée', {}, 404);
+                }
+
+                return jsonResponse(reply, 'Entité récupérée avec succès', entity, 200);
+            } catch (error) {
+                logger.error(
+                    `Erreur lors de la récupération de l'entité ${request.params.id}:`,
+                    error
+                );
+                return jsonResponse(reply, "Erreur lors de la récupération de l'entité", {}, 500);
+            }
+        },
+    });
+
+    /**
+     * Crée une nouvelle entité
+     */
+    public create = asyncHandler<unknown, CreateSomeDto, unknown>({
+        bodySchema: createSomeSchema,
+        handler: async (request: FastifyRequest, reply: FastifyReply) => {
+            try {
+                const data = request.body as CreateSomeDto;
+
+                const newEntity = await someService.create(data);
+
+                return jsonResponse(reply, 'Entité créée avec succès', newEntity, 201);
+            } catch (error) {
+                logger.error("Erreur lors de la création de l'entité:", error);
+
+                if (error.code === 'P2002') {
+                    return jsonResponse(
+                        reply,
+                        'Une entité avec ces informations existe déjà',
+                        {},
+                        400
+                    );
+                }
+
+                return jsonResponse(reply, "Erreur lors de la création de l'entité", {}, 500);
+            }
+        },
+    });
+
+    /**
+     * Met à jour une entité existante
+     */
+    public update = asyncHandler<{ id: string }, UpdateSomeDto, unknown>({
+        paramsSchema: getByIdSchema,
+        bodySchema: updateSomeSchema,
+        handler: async (request: FastifyRequest, reply: FastifyReply) => {
+            try {
+                const { id } = request.params as { id: string };
+                const data = request.body as UpdateSomeDto;
+
+                const updated = await someService.update(id, data);
+
+                if (!updated) {
+                    return jsonResponse(reply, 'Entité non trouvée', {}, 404);
+                }
+
+                return jsonResponse(reply, 'Entité mise à jour avec succès', updated, 200);
+            } catch (error) {
+                logger.error(
+                    `Erreur lors de la mise à jour de l'entité ${request.params.id}:`,
+                    error
+                );
+                return jsonResponse(reply, "Erreur lors de la mise à jour de l'entité", {}, 500);
+            }
+        },
+    });
+
+    /**
+     * Supprime une entité
+     */
+    public delete = asyncHandler<{ id: string }, unknown, unknown>({
+        paramsSchema: getByIdSchema,
+        handler: async (request: FastifyRequest, reply: FastifyReply) => {
+            try {
+                const { id } = request.params as { id: string };
+
+                const deleted = await someService.delete(id);
+
+                if (!deleted) {
+                    return jsonResponse(reply, 'Entité non trouvée', {}, 404);
+                }
+
+                return jsonResponse(reply, 'Entité supprimée avec succès', {}, 200);
+            } catch (error) {
+                logger.error(
+                    `Erreur lors de la suppression de l'entité ${request.params.id}:`,
+                    error
+                );
+                return jsonResponse(reply, "Erreur lors de la suppression de l'entité", {}, 500);
+            }
+        },
+    });
+}
+
+// Exporter une seule instance (pattern singleton)
+export const someController = new SomeController();
+```
+
+## Organisation des Controllers
+
+1. **Controller par Domaine**
+
+    - Créer un controller distinct pour chaque ressource ou domaine fonctionnel
+    - Nommer les controllers de manière descriptive (UserController, ProductController, etc.)
+    - Regrouper les opérations liées à une ressource dans le même controller
+
+2. **Méthodes Standard**
+
+    - Implémenter les opérations CRUD de base pour chaque ressource:
+        - `getAll`: Lister les ressources avec pagination et filtrage
+        - `getById`: Récupérer une ressource spécifique
+        - `create`: Créer une nouvelle ressource
+        - `update`: Mettre à jour une ressource existante
+        - `delete`: Supprimer une ressource
+
+3. **Méthodes Spécifiques**
+    - Ajouter des méthodes pour les opérations spécifiques au domaine
+    - Nommer ces méthodes de manière claire (ex: `activateUser`, `approveOrder`, etc.)
+
+```typescript
+// Méthodes spécifiques dans UserController
+public activateAccount = asyncHandler<{ id: string }, unknown, unknown>({
+    paramsSchema: userIdSchema,
+    handler: async (request, reply) => {
+        const { id } = request.params as { id: string };
+
+        const activated = await userService.activateAccount(id);
+
+        if (!activated) {
+            return jsonResponse(reply, 'Utilisateur non trouvé', {}, 404);
+        }
+
+        return jsonResponse(reply, 'Compte activé avec succès', {}, 200);
+    }
+});
+
+public resetPassword = asyncHandler<unknown, ResetPasswordDto, unknown>({
+    bodySchema: resetPasswordSchema,
+    handler: async (request, reply) => {
+        const data = request.body as ResetPasswordDto;
+
+        await userService.resetPassword(data.email);
+
+        // Toujours renvoyer un succès pour des raisons de sécurité
+        return jsonResponse(reply, 'Si l\'email existe, un lien de réinitialisation a été envoyé', {}, 200);
+    }
+});
+```
+
+## Pattern asyncHandler
+
+Le pattern `asyncHandler` est utilisé pour simplifier la gestion des erreurs et la validation des requêtes.
+
+```typescript
+// Utilitaire asyncHandler
+import { FastifyReply, FastifyRequest } from 'fastify';
+import { ZodSchema } from 'zod';
+
+type AsyncHandlerOptions<Params, Body, Query> = {
+    paramsSchema?: ZodSchema;
+    bodySchema?: ZodSchema;
+    querySchema?: ZodSchema;
+    handler: (request: FastifyRequest, reply: FastifyReply) => Promise<any>;
+};
+
+export function asyncHandler<Params, Body, Query>({
+    paramsSchema,
+    bodySchema,
+    querySchema,
+    handler,
+}: AsyncHandlerOptions<Params, Body, Query>) {
+    return async function (request: FastifyRequest, reply: FastifyReply) {
+        try {
+            // Validation des paramètres
+            if (paramsSchema && request.params) {
+                const result = paramsSchema.safeParse(request.params);
+                if (!result.success) {
+                    return reply.status(400).send({
+                        success: false,
+                        message: 'Paramètres invalides',
+                        data: result.error.format(),
+                        statusCode: 400,
+                    });
+                }
+            }
+
+            // Validation du corps
+            if (bodySchema && request.body) {
+                const result = bodySchema.safeParse(request.body);
+                if (!result.success) {
+                    return reply.status(400).send({
+                        success: false,
+                        message: 'Données invalides',
+                        data: result.error.format(),
+                        statusCode: 400,
+                    });
+                }
+            }
+
+            // Validation des paramètres de requête
+            if (querySchema && request.query) {
+                const result = querySchema.safeParse(request.query);
+                if (!result.success) {
+                    return reply.status(400).send({
+                        success: false,
+                        message: 'Paramètres de requête invalides',
+                        data: result.error.format(),
+                        statusCode: 400,
+                    });
+                }
+            }
+
+            // Exécution du handler
+            return await handler(request, reply);
+        } catch (error) {
+            // Journalisation de l'erreur
+            request.log.error(error);
+
+            // Réponse générique en cas d'erreur non gérée
+            return reply.status(500).send({
+                success: false,
+                message: 'Une erreur inattendue est survenue',
+                data: {},
+                statusCode: 500,
+            });
+        }
+    };
+}
+```
+
+## Gestion des Réponses
+
+```typescript
+// Utilitaire jsonResponse
+import { FastifyReply } from 'fastify';
+
+export function jsonResponse<T>(
+    reply: FastifyReply,
+    message: string,
+    data: T,
+    statusCode: number = 200
+): FastifyReply {
+    return reply.status(statusCode).send({
+        success: statusCode < 400,
+        message,
+        data,
+        statusCode,
+    });
+}
+```
+
+## Gestion des Erreurs
+
+1. **Types d'Erreurs Courantes**
+
+```typescript
+// Hiérarchie d'erreurs personnalisées
+export class AppError extends Error {
+    statusCode: number;
+
+    constructor(message: string, statusCode: number = 500) {
+        super(message);
+        this.statusCode = statusCode;
+        this.name = this.constructor.name;
+    }
+}
+
+export class ValidationError extends AppError {
+    details: any;
+
+    constructor(message: string, details?: any) {
+        super(message, 400);
+        this.details = details;
+    }
+}
+
+export class NotFoundError extends AppError {
+    constructor(message: string) {
+        super(message, 404);
+    }
+}
+
+export class UnauthorizedError extends AppError {
+    constructor(message: string = 'Non autorisé') {
+        super(message, 401);
+    }
+}
+
+export class ForbiddenError extends AppError {
+    constructor(message: string = 'Accès interdit') {
+        super(message, 403);
+    }
+}
+```
+
+2. **Gestion Centralisée des Erreurs**
+
+```typescript
+// Exemple de middleware pour la gestion globale des erreurs
+export function errorHandlerMiddleware(app: FastifyInstance): void {
+    app.setErrorHandler((error, request, reply) => {
+        request.log.error(error);
+
+        // Erreurs personnalisées de l'application
+        if (error instanceof AppError) {
+            return reply.status(error.statusCode).send({
+                success: false,
+                message: error.message,
+                data: error instanceof ValidationError ? error.details : {},
+                statusCode: error.statusCode,
+            });
+        }
+
+        // Erreurs Prisma spécifiques
+        if (error.code === 'P2002') {
+            return reply.status(400).send({
+                success: false,
+                message: 'Une entrée avec ces données existe déjà',
+                data: {},
+                statusCode: 400,
+            });
+        }
+
+        // Erreurs de validation Fastify
+        if (error.validation) {
+            return reply.status(400).send({
+                success: false,
+                message: 'Données invalides',
+                data: error.validation,
+                statusCode: 400,
+            });
+        }
+
+        // Erreur par défaut
+        reply.status(500).send({
+            success: false,
+            message: 'Une erreur inattendue est survenue',
+            data: {},
+            statusCode: 500,
+        });
+    });
+}
+```
+
+## Bonnes Pratiques
+
+1. **Séparation des Préoccupations**
+
+    - Limiter les responsabilités des controllers à la gestion des requêtes/réponses
+    - Déléguer la logique métier aux services
+    - Ne pas accéder directement aux repositories depuis les controllers
+
+2. **Validation des Entrées**
+
+    - Valider systématiquement toutes les entrées utilisateur
+    - Utiliser des schémas de validation (Zod, Joi, etc.)
+    - Rejeter les requêtes mal formées dès que possible
+
+3. **Gestion des Erreurs**
+
+    - Capturer et journaliser toutes les exceptions
+    - Renvoyer des messages d'erreur clairs et informatifs
+    - Utiliser des codes HTTP appropriés selon le type d'erreur
+
+4. **Sécurité**
+
+    - Valider les autorisations avant d'exécuter les opérations sensibles
+    - Éviter d'exposer des informations sensibles dans les réponses
+    - Se protéger contre les attaques courantes (injection, XSS, etc.)
+
+5. **Documentation**
+
+    - Documenter le but et les paramètres de chaque méthode
+    - Utiliser des commentaires JSDoc pour générer la documentation
+    - Inclure des exemples de requêtes et réponses
+
+6. **Cohérence**
+
+    - Utiliser un format de réponse cohérent pour toutes les endpoints
+    - Suivre une convention de nommage uniforme
+    - Standardiser la gestion des erreurs
+
+7. **Tests**
+    - Tester chaque méthode du controller avec différents scénarios
+    - Vérifier les cas de succès et d'échec
+    - Simuler les erreurs des services pour tester la gestion d'erreurs
+
+```typescript
+// Exemple de test pour un controller
+describe('UserController', () => {
+    let mockUserService: any;
+
+    beforeEach(() => {
+        mockUserService = {
+            findById: jest.fn(),
+            create: jest.fn(),
+            update: jest.fn(),
+            delete: jest.fn(),
+        };
+
+        // Injection du mock
+        (userController as any).userService = mockUserService;
+    });
+
+    describe('getById', () => {
+        it('should return a user when found', async () => {
+            // Arrange
+            const mockUser = { id: '123', email: 'test@example.com' };
+            mockUserService.findById.mockResolvedValue(mockUser);
+
+            const request = {
+                params: { id: '123' },
+                log: { error: jest.fn() },
+            } as any;
+
+            const reply = {
+                status: jest.fn().mockReturnThis(),
+                send: jest.fn(),
+            } as any;
+
+            // Act
+            await userController.getById(request, reply);
+
+            // Assert
+            expect(mockUserService.findById).toHaveBeenCalledWith('123');
+            expect(reply.status).toHaveBeenCalledWith(200);
+            expect(reply.send).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    success: true,
+                    data: mockUser,
+                })
+            );
+        });
+
+        it('should return 404 when user not found', async () => {
+            // Arrange
+            mockUserService.findById.mockResolvedValue(null);
+
+            const request = {
+                params: { id: '999' },
+                log: { error: jest.fn() },
+            } as any;
+
+            const reply = {
+                status: jest.fn().mockReturnThis(),
+                send: jest.fn(),
+            } as any;
+
+            // Act
+            await userController.getById(request, reply);
+
+            // Assert
+            expect(reply.status).toHaveBeenCalledWith(404);
+        });
+    });
+});
+```
+
+## Anti-Patterns à Éviter
+
+1. **Logic Métier dans les Controllers**
+
+    - Problème: Placer trop de logique métier dans les controllers
+    - Solution: Déplacer la logique métier vers les services
+
+2. **Accès Direct aux Données**
+
+    - Problème: Accéder directement aux modèles/repositories depuis les controllers
+    - Solution: Toujours passer par les services pour l'accès aux données
+
+3. **Absence de Validation**
+
+    - Problème: Ne pas valider les entrées utilisateur
+    - Solution: Utiliser des validateurs pour toutes les entrées
+
+4. **Controllers Monolithiques**
+
+    - Problème: Controllers avec trop de méthodes ou de responsabilités
+    - Solution: Diviser en controllers plus petits et plus spécialisés
+
+5. **Duplication de Code**
+
+    - Problème: Répéter la même logique dans différents controllers
+    - Solution: Extraire le code commun dans des helpers ou middlewares
+
+6. **Mauvaise Gestion des Erreurs**
+    - Problème: Ne pas gérer correctement les exceptions
+    - Solution: Utiliser try/catch et renvoyer des erreurs appropriées

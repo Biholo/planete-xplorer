@@ -1,0 +1,597 @@
+---
+description: Ce guide présente les bonnes pratiques pour l'implémentation des services qui encapsulent la logique métier de l'application.
+globs: src/services/**/*.ts
+---
+
+# Bonnes Pratiques pour les Services
+
+## Rôle des Services
+
+Les services sont responsables de:
+
+1. Encapsuler la logique métier de l'application
+2. Orchestrer les opérations impliquant plusieurs ressources
+3. Servir d'intermédiaire entre les contrôleurs et les repositories
+4. Implémenter les règles et workflows métier
+5. Gérer les transformations complexes de données
+
+Ils constituent la couche où réside la véritable intelligence de l'application.
+
+## Structure Standard
+
+```typescript
+import prisma from '@/config/prisma';
+import { userRepository } from '@/repositories/userRepository';
+import { EmailService } from '@/services/emailService';
+import { User } from '@shared/types';
+import { logger } from '@/utils/logger';
+import { hashPassword, verifyPassword } from '@/utils/passwordUtils';
+
+class AuthService {
+    constructor(private emailService: EmailService = new EmailService()) {}
+
+    /**
+     * Authentifie un utilisateur et génère un token
+     * @param email - Email de l'utilisateur
+     * @param password - Mot de passe en clair
+     * @returns Les données utilisateur et le token d'accès
+     * @throws Error si les informations d'identification sont invalides
+     */
+    async login(email: string, password: string): Promise<{ user: User; accessToken: string }> {
+        // Rechercher l'utilisateur par email
+        const user = await userRepository.findByEmail(email);
+
+        if (!user) {
+            throw new Error('Email ou mot de passe incorrect');
+        }
+
+        // Vérifier le mot de passe
+        const isPasswordValid = await verifyPassword(password, user.password);
+
+        if (!isPasswordValid) {
+            logger.warn(`Tentative de connexion échouée pour l'email: ${email}`);
+            throw new Error('Email ou mot de passe incorrect');
+        }
+
+        // Générer un token d'accès
+        const accessToken = this.generateToken(user);
+
+        // Journaliser la connexion réussie
+        logger.info(`Utilisateur connecté: ${user.id}`);
+
+        // Retourner l'utilisateur (sans le mot de passe) et le token
+        const { password: _, ...userWithoutPassword } = user;
+        return {
+            user: userWithoutPassword as User,
+            accessToken,
+        };
+    }
+
+    /**
+     * Inscrit un nouvel utilisateur
+     * @param userData - Données de l'utilisateur
+     * @returns L'utilisateur créé et le token d'accès
+     * @throws Error si l'email est déjà utilisé
+     */
+    async register(userData: {
+        email: string;
+        password: string;
+        firstName: string;
+        lastName: string;
+    }): Promise<{ user: User; accessToken: string }> {
+        // Vérifier si l'email est déjà utilisé
+        const existingUser = await userRepository.findByEmail(userData.email);
+
+        if (existingUser) {
+            throw new Error('Cet email est déjà utilisé');
+        }
+
+        // Hacher le mot de passe
+        const hashedPassword = await hashPassword(userData.password);
+
+        // Créer l'utilisateur
+        const user = await userRepository.create({
+            ...userData,
+            password: hashedPassword,
+            roles: JSON.stringify(['ROLE_USER']),
+        });
+
+        // Envoyer un email de bienvenue
+        await this.emailService.sendWelcomeEmail(user.email, user.firstName);
+
+        // Générer un token d'accès
+        const accessToken = this.generateToken(user);
+
+        // Retourner l'utilisateur (sans le mot de passe) et le token
+        const { password: _, ...userWithoutPassword } = user;
+        return {
+            user: userWithoutPassword as User,
+            accessToken,
+        };
+    }
+
+    /**
+     * Demande de réinitialisation de mot de passe
+     * @param email - Email de l'utilisateur
+     * @throws Error si l'utilisateur n'existe pas
+     */
+    async requestPasswordReset(email: string): Promise<void> {
+        // Rechercher l'utilisateur par email
+        const user = await userRepository.findByEmail(email);
+
+        if (!user) {
+            throw new Error('Aucun compte associé à cet email');
+        }
+
+        // Générer un token de réinitialisation
+        const resetToken = this.generateResetToken(user.id);
+
+        // Stocker le token en base de données
+        await prisma.resetToken.create({
+            data: {
+                token: resetToken,
+                userId: user.id,
+                expiresAt: new Date(Date.now() + 1000 * 60 * 60), // Expiration dans 1 heure
+            },
+        });
+
+        // Envoyer l'email de réinitialisation
+        await this.emailService.sendPasswordResetEmail(user.email, user.firstName, resetToken);
+    }
+
+    // Autres méthodes du service...
+
+    /**
+     * Génère un token JWT pour un utilisateur
+     * @param user - Données utilisateur
+     * @returns Le token généré
+     */
+    private generateToken(user: User): string {
+        // Implémentation de la génération de token...
+        return 'token';
+    }
+
+    /**
+     * Génère un token de réinitialisation de mot de passe
+     * @param userId - ID de l'utilisateur
+     * @returns Le token de réinitialisation
+     */
+    private generateResetToken(userId: string): string {
+        // Implémentation de la génération de token de réinitialisation...
+        return 'reset-token';
+    }
+}
+
+// Exporter une instance unique (pattern singleton)
+export const authService = new AuthService();
+```
+
+## Organisation des Services
+
+1. **Services Fonctionnels**
+
+    - Organiser les services par domaine fonctionnel (AuthService, UserService, etc.)
+    - Regrouper les fonctionnalités liées dans le même service
+    - Utiliser une classe pour chaque service
+
+2. **Services Utilitaires**
+
+    - Créer des services spécialisés pour des fonctionnalités transversales
+    - Exemples: EmailService, PaymentService, NotificationService, etc.
+
+3. **Service de Base**
+    - Optionnel: créer un BaseService pour les fonctionnalités communes
+    - Utile pour la journalisation, la validation, etc.
+
+```typescript
+// Exemple de service de base
+abstract class BaseService {
+    protected logger = logger;
+
+    protected validateEntity(entity: any, schema: Zod.Schema): void {
+        const result = schema.safeParse(entity);
+        if (!result.success) {
+            throw new ValidationError('Données invalides', result.error.errors);
+        }
+    }
+
+    protected async withTransaction<T>(
+        callback: (tx: Prisma.TransactionClient) => Promise<T>
+    ): Promise<T> {
+        return prisma.$transaction(callback);
+    }
+}
+
+// Service spécifique héritant du service de base
+class UserService extends BaseService {
+    // Implémentation spécifique...
+}
+```
+
+## Principes d'Implémentation
+
+1. **Logique Métier**
+    - Placer toute la logique métier complexe dans les services
+    - Implémenter les règles et validations métier
+    - Gérer les cas d'erreur spécifiques au domaine
+
+```typescript
+async createOrder(userId: string, items: OrderItem[]): Promise<Order> {
+    // Valider les données d'entrée
+    this.validateOrderItems(items);
+
+    // Vérifier l'existence de l'utilisateur
+    const user = await userRepository.findById(userId);
+    if (!user) {
+        throw new NotFoundError('Utilisateur non trouvé');
+    }
+
+    // Vérifier la disponibilité des produits
+    await this.checkProductsAvailability(items);
+
+    // Calculer le montant total
+    const totalAmount = this.calculateTotalAmount(items);
+
+    // Créer la commande avec une transaction
+    return this.withTransaction(async (tx) => {
+        // Créer la commande
+        const order = await orderRepository.create({
+            userId,
+            totalAmount,
+            status: 'PENDING'
+        });
+
+        // Créer les éléments de la commande
+        for (const item of items) {
+            await orderItemRepository.create({
+                orderId: order.id,
+                productId: item.productId,
+                quantity: item.quantity,
+                price: item.price
+            });
+
+            // Mettre à jour le stock du produit
+            await productRepository.updateStock(item.productId, -item.quantity);
+        }
+
+        // Envoyer une notification
+        await this.notificationService.sendOrderConfirmation(user.email, order);
+
+        return order;
+    });
+}
+```
+
+2. **Gestion des Erreurs**
+    - Utiliser des classes d'erreur spécifiques
+    - Capturer et transformer les erreurs de bas niveau
+    - Fournir des messages d'erreur clairs et informatifs
+
+```typescript
+class NotFoundError extends Error {
+    statusCode = 404;
+    constructor(message: string) {
+        super(message);
+        this.name = 'NotFoundError';
+    }
+}
+
+class ValidationError extends Error {
+    statusCode = 400;
+    details: any;
+    constructor(message: string, details: any) {
+        super(message);
+        this.name = 'ValidationError';
+        this.details = details;
+    }
+}
+
+// Utilisation dans un service
+async getUserProfile(userId: string): Promise<UserProfile> {
+    try {
+        const user = await userRepository.findById(userId);
+
+        if (!user) {
+            throw new NotFoundError('Utilisateur non trouvé');
+        }
+
+        // Transformation des données...
+        return userProfile;
+    } catch (error) {
+        if (error instanceof NotFoundError) {
+            throw error; // Relancer l'erreur telle quelle
+        }
+
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+            // Transformer les erreurs Prisma
+            if (error.code === 'P2025') {
+                throw new NotFoundError('Ressource non trouvée');
+            }
+        }
+
+        // Journaliser et relancer l'erreur
+        this.logger.error('Erreur lors de la récupération du profil utilisateur', error);
+        throw new Error('Erreur lors de la récupération du profil utilisateur');
+    }
+}
+```
+
+3. **Injection de Dépendances**
+    - Utiliser l'injection de dépendances pour faciliter les tests
+    - Accepter les dépendances dans le constructeur
+    - Fournir des valeurs par défaut pour simplifier l'utilisation
+
+```typescript
+class PaymentService {
+    constructor(
+        private paymentGateway: PaymentGateway = new StripeGateway(),
+        private emailService: EmailService = new EmailService()
+    ) {}
+
+    async processPayment(orderId: string, paymentDetails: PaymentDetails): Promise<PaymentResult> {
+        // Utilisation des dépendances injectées
+        const result = await this.paymentGateway.charge(paymentDetails);
+
+        if (result.success) {
+            await this.emailService.sendPaymentConfirmation(paymentDetails.email, result);
+        }
+
+        return result;
+    }
+}
+
+// Facilite les tests
+const mockPaymentGateway = { charge: jest.fn() };
+const mockEmailService = { sendPaymentConfirmation: jest.fn() };
+const paymentService = new PaymentService(mockPaymentGateway, mockEmailService);
+```
+
+4. **Transactions et Opérations Atomiques**
+    - Utiliser des transactions pour les opérations qui modifient plusieurs entités
+    - Garantir la cohérence des données en cas d'erreur
+
+```typescript
+async transferFunds(fromAccountId: string, toAccountId: string, amount: number): Promise<TransferResult> {
+    return prisma.$transaction(async (tx) => {
+        // Vérifier le solde du compte source
+        const fromAccount = await tx.account.findUnique({ where: { id: fromAccountId } });
+
+        if (!fromAccount || fromAccount.balance < amount) {
+            throw new Error('Solde insuffisant');
+        }
+
+        // Vérifier l'existence du compte destinataire
+        const toAccount = await tx.account.findUnique({ where: { id: toAccountId } });
+
+        if (!toAccount) {
+            throw new Error('Compte destinataire non trouvé');
+        }
+
+        // Débiter le compte source
+        await tx.account.update({
+            where: { id: fromAccountId },
+            data: { balance: { decrement: amount } }
+        });
+
+        // Créditer le compte destinataire
+        await tx.account.update({
+            where: { id: toAccountId },
+            data: { balance: { increment: amount } }
+        });
+
+        // Créer une transaction pour historique
+        const transaction = await tx.transaction.create({
+            data: {
+                fromAccountId,
+                toAccountId,
+                amount,
+                type: 'TRANSFER',
+                status: 'COMPLETED'
+            }
+        });
+
+        return {
+            transactionId: transaction.id,
+            status: 'SUCCESS',
+            message: 'Transfert effectué avec succès'
+        };
+    });
+}
+```
+
+5. **Services Composés**
+    - Composer des services complexes à partir de services plus simples
+    - Maintenir le principe de responsabilité unique
+
+```typescript
+class OrderService {
+    constructor(
+        private productService: ProductService = new ProductService(),
+        private paymentService: PaymentService = new PaymentService(),
+        private shippingService: ShippingService = new ShippingService(),
+        private notificationService: NotificationService = new NotificationService()
+    ) {}
+
+    async placeOrder(orderData: OrderData): Promise<Order> {
+        // Vérifier la disponibilité des produits
+        await this.productService.checkAvailability(orderData.items);
+
+        // Créer la commande
+        const order = await orderRepository.create({
+            ...orderData,
+            status: 'PENDING',
+        });
+
+        // Traiter le paiement
+        const paymentResult = await this.paymentService.processPayment(order.id, orderData.payment);
+
+        if (paymentResult.success) {
+            // Mettre à jour le statut de la commande
+            await orderRepository.update(order.id, { status: 'PAID' });
+
+            // Créer l'expédition
+            await this.shippingService.createShipment(order.id, orderData.shippingAddress);
+
+            // Envoyer les notifications
+            await this.notificationService.sendOrderConfirmation(orderData.customerEmail, order);
+        } else {
+            // Gérer l'échec du paiement
+            await orderRepository.update(order.id, { status: 'PAYMENT_FAILED' });
+            throw new Error('Échec du paiement: ' + paymentResult.message);
+        }
+
+        return order;
+    }
+}
+```
+
+## Bonnes Pratiques
+
+1. **Séparation des Préoccupations**
+
+    - Les services ne doivent gérer que la logique métier
+    - Déléguer l'accès aux données aux repositories
+    - Déléguer la validation des entrées aux validateurs
+    - Déléguer la gestion des requêtes/réponses HTTP aux contrôleurs
+
+2. **Documentation**
+
+    - Documenter chaque méthode publique avec JSDoc
+    - Inclure des informations sur les paramètres, le retour et les exceptions
+    - Expliquer les cas d'utilisation complexes
+
+3. **Tests**
+    - Tester toutes les méthodes des services
+    - Utiliser des mocks pour les dépendances externes
+    - Tester les cas d'erreur et les cas limites
+    - Tester les workflows métier complets
+
+```typescript
+describe('AuthService', () => {
+    let authService: AuthService;
+    let mockUserRepository: any;
+    let mockEmailService: any;
+
+    beforeEach(() => {
+        mockUserRepository = {
+            findByEmail: jest.fn(),
+            create: jest.fn(),
+        };
+
+        mockEmailService = {
+            sendWelcomeEmail: jest.fn(),
+        };
+
+        authService = new AuthService();
+        (authService as any).userRepository = mockUserRepository;
+        (authService as any).emailService = mockEmailService;
+    });
+
+    describe('login', () => {
+        it('should return user and token on successful login', async () => {
+            // Arrange
+            const mockUser = { id: '1', email: 'test@example.com', password: 'hashedPassword' };
+            mockUserRepository.findByEmail.mockResolvedValue(mockUser);
+            jest.spyOn(authService as any, 'verifyPassword').mockResolvedValue(true);
+            jest.spyOn(authService as any, 'generateToken').mockReturnValue('token123');
+
+            // Act
+            const result = await authService.login('test@example.com', 'password123');
+
+            // Assert
+            expect(result).toHaveProperty('user');
+            expect(result).toHaveProperty('accessToken', 'token123');
+            expect(result.user).not.toHaveProperty('password');
+            expect(mockUserRepository.findByEmail).toHaveBeenCalledWith('test@example.com');
+        });
+
+        it('should throw error if user not found', async () => {
+            // Arrange
+            mockUserRepository.findByEmail.mockResolvedValue(null);
+
+            // Act & Assert
+            await expect(authService.login('test@example.com', 'password123')).rejects.toThrow(
+                'Email ou mot de passe incorrect'
+            );
+        });
+    });
+});
+```
+
+4. **Gestion des Exceptions**
+
+    - Créer des classes d'exception spécifiques
+    - Capturer les exceptions de bas niveau et les transformer
+    - Journaliser les erreurs importantes
+    - Propager les erreurs métier vers les contrôleurs
+
+5. **Performance**
+    - Optimiser les requêtes à la base de données
+    - Utiliser le caching pour les opérations coûteuses
+    - Minimiser les appels aux services externes
+    - Traiter les opérations lourdes de manière asynchrone
+
+```typescript
+class CacheService {
+    private cache = new Map<string, { data: any; expiry: number }>();
+
+    async get<T>(key: string, fetcher: () => Promise<T>, ttl: number = 60000): Promise<T> {
+        const now = Date.now();
+        const cached = this.cache.get(key);
+
+        if (cached && cached.expiry > now) {
+            return cached.data as T;
+        }
+
+        const data = await fetcher();
+        this.cache.set(key, { data, expiry: now + ttl });
+        return data;
+    }
+
+    invalidate(key: string): void {
+        this.cache.delete(key);
+    }
+}
+
+// Utilisation dans un service
+async getUserProfile(userId: string): Promise<UserProfile> {
+    const cacheKey = `user_profile_${userId}`;
+
+    return this.cacheService.get(cacheKey, async () => {
+        const user = await userRepository.findById(userId);
+        // ...transformation des données
+        return userProfile;
+    }, 300000); // Cache de 5 minutes
+}
+```
+
+## Anti-Patterns à Éviter
+
+1. **Anemic Service**
+
+    - Un service qui n'implémente aucune logique métier et ne fait que déléguer aux repositories
+    - Solution: Ajouter de la valeur en implémentant des règles métier, des validations, etc.
+
+2. **God Service**
+
+    - Un service trop large qui gère trop de responsabilités
+    - Solution: Décomposer en services plus petits et spécialisés
+
+3. **Duplication de Logique**
+
+    - Répéter la même logique métier dans différents services
+    - Solution: Extraire dans des services utilitaires ou des helpers
+
+4. **Accès Direct à la Base de Données**
+
+    - Contourner les repositories et accéder directement à la base de données
+    - Solution: Toujours utiliser les repositories pour l'accès aux données
+
+5. **Logique Métier dans les Contrôleurs**
+
+    - Mettre la logique métier dans les contrôleurs au lieu des services
+    - Solution: Déplacer toute la logique métier vers les services
+
+6. **Couplage Fort**
+    - Créer des dépendances fortes entre services
+    - Solution: Utiliser l'injection de dépendances et les interfaces

@@ -1,0 +1,19 @@
+model SavedSearch {
+  id             String  @id @default(uuid())
+  name           String // nom donné par l'utilisateur à sa recherche
+  searchCriteria Json // critères de recherche stockés en JSON
+  isPublic       Boolean @default(false) // recherche publique ou privée
+
+  // Relations
+  userId            String
+  user              User             @relation(fields: [userId], references: [id])
+  celestialObjectId String?
+  celestialObject   CelestialObject? @relation(fields: [celestialObjectId], references: [id])
+
+  // Metadata
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@map("saved_searches")
+}

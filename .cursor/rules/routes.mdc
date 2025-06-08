@@ -1,0 +1,419 @@
+---
+description: Ce guide présente les bonnes pratiques pour la définition et l'organisation des routes dans notre application Fastify.
+globs: src/routes/**/*.ts
+---
+
+# Bonnes Pratiques pour les Routes
+
+## Rôle des Routes
+
+Les routes sont responsables de:
+
+1. Définir les points d'entrée de l'API (endpoints)
+2. Configurer les méthodes HTTP et les chemins d'accès
+3. Rattacher les middlewares et les validateurs appropriés
+4. Associer les handlers des contrôleurs aux endpoints
+5. Regrouper les endpoints par domaine fonctionnel
+
+Elles servent de couche de routage pour diriger les requêtes entrantes vers les bons contrôleurs.
+
+## Structure Standard
+
+```typescript
+import { userController } from '@/controllers/userController';
+import { hasRole, isAuthenticated } from '@/middleware/auth';
+import { validateRequest } from '@/middleware/validation';
+import { Role } from '@shared/types';
+import { createSwaggerSchema } from '@/utils/swaggerUtils';
+import { createUserSchema, getUserSchema, updateUserSchema } from '@/validators/userValidator';
+
+import { FastifyInstance, FastifyPluginOptions } from 'fastify';
+
+export async function userRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
+    // Récupérer tous les utilisateurs
+    fastify.get('/', {
+        schema: createSwaggerSchema('Récupère tous les utilisateurs.', [
+            { message: 'Utilisateurs récupérés avec succès', data: [], status: 200 },
+            { message: 'Non autorisé', data: [], status: 401 },
+            { message: 'Erreur lors de la récupération des utilisateurs', data: [], status: 500 },
+        ]),
+        preHandler: [isAuthenticated, hasRole(Role.Admin)],
+        handler: userController.getAllUsers,
+    });
+
+    // Récupérer un utilisateur par ID
+    fastify.get('/:id', {
+        schema: createSwaggerSchema('Récupère un utilisateur par ID.', [
+            { message: 'Utilisateur récupéré avec succès', data: {}, status: 200 },
+            { message: 'Non autorisé', data: {}, status: 401 },
+            { message: 'Utilisateur non trouvé', data: {}, status: 404 },
+            { message: "Erreur lors de la récupération de l'utilisateur", data: {}, status: 500 },
+        ]),
+        preHandler: [isAuthenticated, validateRequest(getUserSchema, 'params')],
+        handler: userController.getUserById,
+    });
+
+    // Créer un utilisateur
+    fastify.post('/', {
+        schema: createSwaggerSchema('Crée un nouvel utilisateur.', [
+            { message: 'Utilisateur créé avec succès', data: {}, status: 201 },
+            { message: 'Données invalides', data: {}, status: 400 },
+            { message: 'Non autorisé', data: {}, status: 401 },
+            { message: "Erreur lors de la création de l'utilisateur", data: {}, status: 500 },
+        ]),
+        preHandler: [
+            isAuthenticated,
+            hasRole(Role.Admin),
+            validateRequest(createUserSchema, 'body'),
+        ],
+        handler: userController.createUser,
+    });
+
+    // Mettre à jour un utilisateur
+    fastify.put('/:id', {
+        schema: createSwaggerSchema('Met à jour un utilisateur existant.', [
+            { message: 'Utilisateur mis à jour avec succès', data: {}, status: 200 },
+            { message: 'Données invalides', data: {}, status: 400 },
+            { message: 'Non autorisé', data: {}, status: 401 },
+            { message: 'Utilisateur non trouvé', data: {}, status: 404 },
+            { message: "Erreur lors de la mise à jour de l'utilisateur", data: {}, status: 500 },
+        ]),
+        preHandler: [
+            isAuthenticated,
+            hasRole(Role.Admin),
+            validateRequest(getUserSchema, 'params'),
+            validateRequest(updateUserSchema, 'body'),
+        ],
+        handler: userController.updateUser,
+    });
+
+    // Supprimer un utilisateur
+    fastify.delete('/:id', {
+        schema: createSwaggerSchema('Supprime un utilisateur.', [
+            { message: 'Utilisateur supprimé avec succès', data: {}, status: 204 },
+            { message: 'Non autorisé', data: {}, status: 401 },
+            { message: 'Utilisateur non trouvé', data: {}, status: 404 },
+            { message: "Erreur lors de la suppression de l'utilisateur", data: {}, status: 500 },
+        ]),
+        preHandler: [
+            isAuthenticated,
+            hasRole(Role.Admin),
+            validateRequest(getUserSchema, 'params'),
+        ],
+        handler: userController.deleteUser,
+    });
+}
+```
+
+## Organisation et Structure des Routes
+
+1. **Fichiers de Routes**
+
+    - Créer un fichier de routes distinct pour chaque domaine fonctionnel (users, products, orders, etc.)
+    - Nommer les fichiers de manière cohérente (userRoutes.ts, productRoutes.ts, etc.)
+    - Exporter une fonction de plugin Fastify qui enregistre les routes
+
+2. **Regroupement des Routes**
+    - Regrouper les routes liées sous un préfixe commun
+    - Utiliser des sous-routes pour des fonctionnalités imbriquées
+
+```typescript
+// Enregistrement des routes dans l'application principale
+import { authRoutes } from './routes/authRoutes';
+import { productRoutes } from './routes/productRoutes';
+import { userRoutes } from './routes/userRoutes';
+
+// ...
+
+app.register(userRoutes, { prefix: '/api/users' });
+app.register(authRoutes, { prefix: '/api/auth' });
+app.register(productRoutes, { prefix: '/api/products' });
+```
+
+3. **Structure des Fichiers de Routes**
+    - Importer les contrôleurs et middlewares nécessaires
+    - Définir les routes avec leurs méthodes HTTP et chemins
+    - Configurer les options de route (schéma, preHandlers, handler)
+
+## Bonnes Pratiques pour les Endpoints
+
+1. **Conventions de Nommage**
+
+    - Utiliser des noms pluriels pour les collections (`/users`, `/products`)
+    - Utiliser des identificateurs pour les ressources spécifiques (`/users/:id`)
+    - Utiliser des sous-ressources pour les relations (`/users/:id/orders`)
+    - Utiliser des verbes pour les actions qui ne sont pas CRUD (`/auth/login`, `/users/:id/reset-password`)
+
+2. **Méthodes HTTP Appropriées**
+
+    - GET: Pour récupérer des ressources sans effet secondaire
+    - POST: Pour créer de nouvelles ressources ou déclencher des actions
+    - PUT: Pour remplacer complètement une ressource existante
+    - PATCH: Pour mettre à jour partiellement une ressource
+    - DELETE: Pour supprimer une ressource
+
+3. **Structure RESTful**
+    - `/resource` - GET pour lister, POST pour créer
+    - `/resource/:id` - GET pour récupérer, PUT/PATCH pour mettre à jour, DELETE pour supprimer
+    - `/resource/:id/sub-resource` - Pour les relations imbriquées
+
+```typescript
+// Exemple de structure RESTful
+app.register(
+    async function (fastify) {
+        // Ressource principale
+        fastify.get('/', handler); // Liste tous les produits
+        fastify.post('/', handler); // Crée un nouveau produit
+
+        // Ressource spécifique
+        fastify.get('/:id', handler); // Récupère un produit
+        fastify.put('/:id', handler); // Met à jour un produit
+        fastify.delete('/:id', handler); // Supprime un produit
+
+        // Sous-ressource
+        fastify.get('/:id/reviews', handler); // Liste les avis d'un produit
+        fastify.post('/:id/reviews', handler); // Ajoute un avis à un produit
+
+        // Action spéciale
+        fastify.post('/:id/publish', handler); // Action: publier un produit
+    },
+    { prefix: '/api/products' }
+);
+```
+
+## Gestion des Middlewares et Validations
+
+1. **Middlewares de Prétraitement**
+    - Utiliser `preHandler` pour appliquer des middlewares à une route
+    - Chaîner les middlewares dans un tableau pour un traitement séquentiel
+
+```typescript
+fastify.get('/protected', {
+    preHandler: [
+        isAuthenticated, // Vérifie l'authentification
+        hasRole(Role.Admin), // Vérifie les autorisations
+        logRequest, // Journalise la requête
+    ],
+    handler: protectedHandler,
+});
+```
+
+2. **Validation des Requêtes**
+    - Valider toutes les entrées utilisateur avec des schémas
+    - Appliquer les validateurs via les middlewares de validation
+    - Définir des schémas cohérents pour les parties de la requête (body, params, query)
+
+```typescript
+// Middleware de validation avec Zod
+fastify.post('/users', {
+    preHandler: validateRequest(createUserSchema, 'body'),
+    handler: userController.createUser,
+});
+
+// Alternative avec le schéma intégré de Fastify
+fastify.post('/users', {
+    schema: {
+        body: createUserSchema,
+        response: {
+            201: createUserResponseSchema,
+        },
+    },
+    handler: userController.createUser,
+});
+```
+
+## Documentation des Routes
+
+1. **Documentation avec Swagger/OpenAPI**
+    - Documenter chaque route avec ses paramètres, corps et réponses
+    - Utiliser une fonction utilitaire pour créer des schémas cohérents
+    - Inclure des exemples et des descriptions
+
+```typescript
+fastify.get('/:id', {
+    schema: {
+        description: 'Récupère un utilisateur par son ID',
+        tags: ['users'],
+        params: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', format: 'uuid', description: "L'ID de l'utilisateur" },
+            },
+            required: ['id'],
+        },
+        response: {
+            200: {
+                description: 'Utilisateur récupéré avec succès',
+                type: 'object',
+                properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Utilisateur récupéré avec succès' },
+                    data: userSchema,
+                    statusCode: { type: 'number', example: 200 },
+                },
+            },
+            404: {
+                description: 'Utilisateur non trouvé',
+                type: 'object',
+                properties: {
+                    success: { type: 'boolean', example: false },
+                    message: { type: 'string', example: 'Utilisateur non trouvé' },
+                    data: { type: 'object', additionalProperties: false },
+                    statusCode: { type: 'number', example: 404 },
+                },
+            },
+        },
+    },
+    handler: userController.getUserById,
+});
+```
+
+2. **Fonctions Utilitaires pour la Documentation**
+    - Créer des fonctions pour générer des schémas de documentation
+    - Réutiliser les parties communes des schémas
+
+```typescript
+function createSwaggerSchema(
+    description: string,
+    responses: Array<{ message: string; data: any; status: number }>,
+    schema: any = null,
+    needAuth: boolean = false
+) {
+    const swaggerResponses: Record<string, any> = {};
+
+    responses.forEach((response) => {
+        swaggerResponses[response.status] = {
+            description: response.message,
+            type: 'object',
+            properties: {
+                success: { type: 'boolean', example: response.status < 400 },
+                message: { type: 'string', example: response.message },
+                data: response.data || { type: 'object', additionalProperties: false },
+                statusCode: { type: 'number', example: response.status },
+            },
+        };
+    });
+
+    return {
+        description,
+        tags: ['users'],
+        security: needAuth ? [{ bearerAuth: [] }] : [],
+        body: schema,
+        response: swaggerResponses,
+    };
+}
+```
+
+## Tests des Routes
+
+1. **Tests d'Intégration**
+    - Tester chaque route individuellement
+    - Vérifier les différents cas de réussite et d'échec
+    - Tester les permissions et validations
+
+```typescript
+// Exemple de test de route avec Jest et Supertest
+describe('User Routes', () => {
+    let app;
+    let token;
+
+    beforeAll(async () => {
+        app = await buildApp();
+
+        // Authentification pour obtenir un token
+        const response = await app.inject({
+            method: 'POST',
+            url: '/api/auth/login',
+            payload: {
+                email: 'admin@example.com',
+                password: 'password123',
+            },
+        });
+
+        const body = JSON.parse(response.body);
+        token = body.data.accessToken;
+    });
+
+    it('should return all users', async () => {
+        const response = await app.inject({
+            method: 'GET',
+            url: '/api/users',
+            headers: {
+                authorization: `Bearer ${token}`,
+            },
+        });
+
+        expect(response.statusCode).toBe(200);
+        const body = JSON.parse(response.body);
+        expect(body.success).toBe(true);
+        expect(Array.isArray(body.data.users)).toBe(true);
+    });
+
+    // Plus de tests...
+});
+```
+
+## Bonnes Pratiques Générales
+
+1. **Cohérence des Réponses**
+    - Utiliser un format de réponse cohérent pour toutes les routes
+    - Inclure un indicateur de succès, un message, les données et un code d'état
+    - Traiter les erreurs de manière cohérente
+
+```typescript
+// Format de réponse standard
+{
+    "success": true,
+    "message": "Utilisateurs récupérés avec succès",
+    "data": { ... },
+    "statusCode": 200
+}
+```
+
+2. **Gestion des Versions**
+
+    - Préfixer les routes avec une version si nécessaire (`/api/v1/users`)
+    - Maintenir la compatibilité descendante lors des mises à jour
+
+3. **Performances**
+
+    - Éviter les routes qui retournent des données volumineuses sans pagination
+    - Utiliser des paramètres de requête pour filtrer, trier et paginer
+    - Mettre en cache les réponses lorsque cela est approprié
+
+4. **Sécurité**
+
+    - Valider toutes les entrées utilisateur
+    - Protéger les routes sensibles avec une authentification et une autorisation
+    - Éviter les vulnérabilités courantes (CSRF, XSS, injection, etc.)
+
+5. **Lisibilité et Maintenabilité**
+    - Organiser les routes de manière logique et cohérente
+    - Commenter les routes complexes
+    - Utiliser des fonctions utilitaires pour réduire la duplication
+
+## Anti-Patterns à Éviter
+
+1. **Routes Sans Validation**
+
+    - Toujours valider les entrées utilisateur avant de les traiter
+    - Utiliser des schémas de validation explicites
+
+2. **Routes Trop Complexes**
+
+    - Éviter les routes qui font trop de choses
+    - Diviser les opérations complexes en étapes distinctes
+
+3. **Duplication de Code**
+
+    - Extraire les configurations répétitives dans des fonctions utilitaires
+    - Réutiliser les middlewares et les schémas de validation
+
+4. **Trop de Logique dans les Routes**
+
+    - Déléguer la logique métier aux contrôleurs et aux services
+    - Les routes ne doivent s'occuper que du routage et de la configuration
+
+5. **URLs Incohérentes**
+    - Suivre une convention de nommage cohérente
+    - Respecter les principes RESTful pour les opérations CRUD

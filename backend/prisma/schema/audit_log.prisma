@@ -1,0 +1,21 @@
+model AuditLog {
+  id        String  @id @default(uuid())
+  action    String // CREATE, UPDATE, DELETE, VIEW
+  tableName String // nom de la table concernée
+  recordId  String // ID de l'enregistrement concerné
+  oldValues Json? // anciennes valeurs (pour UPDATE/DELETE)
+  newValues Json? // nouvelles valeurs (pour CREATE/UPDATE)
+  ipAddress String? // adresse IP de l'utilisateur
+  userAgent String? // user agent du navigateur
+
+  // Relations
+  userId            String?
+  user              User?            @relation(fields: [userId], references: [id])
+  celestialObjectId String?
+  celestialObject   CelestialObject? @relation(fields: [celestialObjectId], references: [id])
+
+  // Metadata
+  createdAt DateTime @default(now())
+
+  @@map("audit_logs")
+}

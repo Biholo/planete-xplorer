@@ -1,0 +1,644 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: Ce guide présente les bonnes pratiques pour la création et l'utilisation des validateurs dans notre application.
+globs: src/validators/**/*.ts
+---
+
+# Bonnes Pratiques pour les Validateurs
+
+## Rôle des Validateurs
+
+Les validateurs sont responsables de:
+
+1. Définir les schémas de validation pour les données entrantes
+2. Spécifier les contraintes et règles métier pour les données
+3. Fournir un typage fort pour les données validées
+4. Assurer la cohérence et l'intégrité des données
+5. Générer des messages d'erreur clairs et informatifs
+
+Ils servent de première ligne de défense contre les données invalides ou malveillantes.
+
+## Structure et Organisation
+
+1. **Organisation par Domaine**
+
+    - Regrouper les schémas de validation par entité ou domaine fonctionnel
+    - Créer un fichier par entité (ex: `userValidator.ts`, `productValidator.ts`)
+    - Maintenir une cohérence avec l'organisation des autres couches
+
+2. **Types Exportés**
+    - Exporter les types dérivés des schémas de validation
+    - Utiliser la fonction `Serialize` pour les types de requêtes et de réponses
+
+```typescript
+// src/validators/userValidator.ts
+import { Serialize } from '@shared/types';
+
+import { z } from 'zod';
+
+// Schéma de validation pour la création d'un utilisateur
+export const createUserSchema = z.object({
+    email: z.string().email("L'email n'est pas valide"),
+    password: z
+        .string()
+        .min(8, 'Le mot de passe doit contenir au moins 8 caractères')
+        .regex(/[A-Z]/, 'Le mot de passe doit contenir au moins une majuscule')
+        .regex(/[0-9]/, 'Le mot de passe doit contenir au moins un chiffre'),
+    firstName: z.string().min(2, 'Le prénom doit contenir au moins 2 caractères'),
+    lastName: z.string().min(2, 'Le nom doit contenir au moins 2 caractères'),
+    phone: z.string().optional(),
+    roles: z.array(z.string()).optional(),
+});
+
+// Type dérivé du schéma
+export type CreateUserData = Serialize<z.infer<typeof createUserSchema>>;
+
+// Schéma pour la mise à jour d'un utilisateur (tous les champs sont optionnels)
+export const updateUserSchema = createUserSchema.partial().omit({ password: true });
+
+export type UpdateUserData = Serialize<z.infer<typeof updateUserSchema>>;
+
+// Schéma pour les paramètres de requête (ID)
+export const getUserSchema = z.object({
+    id: z.string().uuid("L'ID doit être un UUID valide"),
+});
+
+export type GetUserParams = Serialize<z.infer<typeof getUserSchema>>;
+
+// Schéma pour les paramètres de requête (pagination, filtrage)
+export const getUsersQuerySchema = z.object({
+    page: z
+        .string()
+        .optional()
+        .transform((val) => (val ? parseInt(val, 10) : 1)),
+    limit: z
+        .string()
+        .optional()
+        .transform((val) => (val ? parseInt(val, 10) : 10)),
+    search: z.string().optional(),
+    sortBy: z.string().optional(),
+    sortDirection: z.enum(['asc', 'desc']).optional().default('asc'),
+});
+
+export type GetUsersQueryParams = Serialize<z.infer<typeof getUsersQuerySchema>>;
+```
+
+## Utilisation avec Zod
+
+1. **Schémas de Base**
+    - Utiliser des schémas de base pour les entités principales
+    - Réutiliser ces schémas pour construire des schémas plus complexes
+
+```typescript
+// Schéma de base pour un produit
+const baseProductSchema = z.object({
+    name: z.string().min(3, 'Le nom doit contenir au moins 3 caractères'),
+    description: z.string().optional(),
+    price: z.number().positive('Le prix doit être positif'),
+    sku: z.string().regex(/^[A-Z0-9]{8}$/, 'Le SKU doit être au format XXXXXXXX'),
+    categoryId: z.string().uuid('La catégorie doit être un UUID valide'),
+});
+
+// Schéma pour la création (avec tous les champs requis)
+export const createProductSchema = baseProductSchema.extend({
+    stock: z.number().int().nonnegative('Le stock doit être un entier positif ou nul'),
+});
+
+// Schéma pour la mise à jour (tous les champs optionnels)
+export const updateProductSchema = baseProductSchema.partial();
+```
+
+2. **Validations Complexes**
+    - Utiliser `.refine()` pour des validations personnalisées
+    - Implémenter des règles métier spécifiques
+    - Combiner plusieurs validations lorsque nécessaire
+
+```typescript
+// Validation que le mot de passe et sa confirmation sont identiques
+export const resetPasswordSchema = z
+    .object({
+        token: z.string().min(1, 'Le token est requis'),
+        password: z
+            .string()
+            .min(8, 'Le mot de passe doit contenir au moins 8 caractères')
+            .regex(/[A-Z]/, 'Le mot de passe doit contenir au moins une majuscule')
+            .regex(/[0-9]/, 'Le mot de passe doit contenir au moins un chiffre'),
+        confirmPassword: z.string(),
+    })
+    .refine((data) => data.password === data.confirmPassword, {
+        message: 'Les mots de passe ne correspondent pas',
+        path: ['confirmPassword'], // Chemin où l'erreur doit être affichée
+    });
+
+// Validation de dates (date de fin après date de début)
+export const eventSchema = z
+    .object({
+        title: z.string().min(3),
+        startDate: z.string().datetime(),
+        endDate: z.string().datetime(),
+    })
+    .refine((data) => new Date(data.startDate) < new Date(data.endDate), {
+        message: 'La date de fin doit être postérieure à la date de début',
+        path: ['endDate'],
+    });
+```
+
+3. **Transformations**
+    - Utiliser `.transform()` pour modifier les données pendant la validation
+    - Convertir des types (ex: string -> number)
+    - Normaliser les données (ex: trim, lowercase)
+
+```typescript
+// Transformation de chaîne en date
+export const dateSchema = z.string().transform((val) => new Date(val));
+
+// Transformation des paramètres de requête
+export const paginationSchema = z.object({
+    page: z
+        .string()
+        .optional()
+        .transform((val) => (val ? parseInt(val, 10) : 1)),
+    limit: z
+        .string()
+        .optional()
+        .transform((val) => (val ? parseInt(val, 10) : 10)),
+});
+
+// Normalisation des données utilisateur
+export const userInputSchema = z.object({
+    email: z
+        .string()
+        .email()
+        .transform((val) => val.toLowerCase().trim()),
+    firstName: z.string().transform((val) => val.trim()),
+    lastName: z.string().transform((val) => val.trim().toUpperCase()),
+});
+```
+
+## Composition de Schémas
+
+1. **Extension et Réutilisation**
+    - Étendre des schémas existants pour ajouter des champs
+    - Omettre des champs pour créer des sous-schémas
+    - Rendre des champs optionnels pour les mises à jour
+
+```typescript
+// Schéma de base
+const addressSchema = z.object({
+    street: z.string(),
+    city: z.string(),
+    zipCode: z.string(),
+    country: z.string(),
+});
+
+// Extension pour adresse de livraison
+const shippingAddressSchema = addressSchema.extend({
+    recipientName: z.string(),
+    phoneNumber: z.string(),
+});
+
+// Schéma partiel pour mises à jour
+const updateAddressSchema = addressSchema.partial();
+
+// Omission de champs
+const simpleAddressSchema = addressSchema.omit({ country: true });
+```
+
+2. **Schémas Imbriqués**
+    - Composer des schémas pour représenter des structures de données complexes
+    - Utiliser des schémas imbriqués pour valider des objets imbriqués
+
+```typescript
+// Schéma d'adresse
+const addressSchema = z.object({
+    street: z.string(),
+    city: z.string(),
+    zipCode: z.string(),
+    country: z.string(),
+});
+
+// Schéma d'item de commande
+const orderItemSchema = z.object({
+    productId: z.string().uuid(),
+    quantity: z.number().int().positive(),
+    price: z.number().positive(),
+});
+
+// Schéma de commande complet avec imbrication
+const createOrderSchema = z.object({
+    userId: z.string().uuid(),
+    items: z.array(orderItemSchema).min(1, 'La commande doit contenir au moins un produit'),
+    shippingAddress: addressSchema,
+    billingAddress: addressSchema.optional(),
+    paymentMethod: z.enum(['credit_card', 'paypal', 'bank_transfer']),
+    notes: z.string().optional(),
+});
+```
+
+3. **Unions et Intersections**
+    - Utiliser des unions pour représenter des types alternatifs
+    - Utiliser des intersections pour combiner des schémas
+
+```typescript
+// Union de types de paiement
+const paymentMethodSchema = z.discriminatedUnion('type', [
+    z.object({
+        type: z.literal('credit_card'),
+        cardNumber: z.string(),
+        expiryDate: z.string(),
+        cvv: z.string(),
+    }),
+    z.object({
+        type: z.literal('paypal'),
+        email: z.string().email(),
+    }),
+    z.object({
+        type: z.literal('bank_transfer'),
+        accountNumber: z.string(),
+        bankCode: z.string(),
+    }),
+]);
+
+// Intersection de schémas
+const baseUserSchema = z.object({
+    id: z.string().uuid(),
+    email: z.string().email(),
+    fullName: z.string(),
+});
+
+const userRolesSchema = z.object({
+    roles: z.array(z.string()),
+});
+
+const completeUserSchema = baseUserSchema.and(userRolesSchema);
+```
+
+## Intégration avec Fastify
+
+1. **Middleware de Validation**
+    - Créer un middleware pour appliquer les validations aux requêtes
+    - Utiliser les schémas pour valider les différentes parties de la requête (body, params, query)
+
+```typescript
+// src/middleware/validation.ts
+import { logger } from '@/utils/logger';
+
+import { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
+import { AnyZodObject, ZodError } from 'zod';
+
+/**
+ * Middleware de validation avec Zod
+ * @param schema - Schéma de validation Zod
+ * @param source - Partie de la requête à valider (body, params, query)
+ * @returns Middleware Fastify
+ */
+export function validateRequest(
+    schema: AnyZodObject,
+    source: 'body' | 'params' | 'query' = 'body'
+) {
+    return (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => {
+        try {
+            // Récupérer les données à valider
+            const data =
+                source === 'body'
+                    ? request.body
+                    : source === 'params'
+                      ? request.params
+                      : request.query;
+
+            // Valider les données avec le schéma
+            const result = schema.safeParse(data);
+
+            if (!result.success) {
+                // Formater les erreurs pour la réponse
+                const errors = result.error.errors.reduce(
+                    (acc, err) => {
+                        const path = err.path.join('.');
+                        acc[path] = err.message;
+                        return acc;
+                    },
+                    {} as Record<string, string>
+                );
+
+                // Journaliser l'erreur
+                logger.debug(`Erreur de validation pour ${source}: ${JSON.stringify(errors)}`);
+
+                // Renvoyer une réponse d'erreur
+                reply.status(400).send({
+                    success: false,
+                    message: 'Erreur de validation des données',
+                    data: { errors },
+                    statusCode: 400,
+                });
+                return;
+            }
+
+            // Mettre à jour les données validées dans la requête
+            if (source === 'body') {
+                request.body = result.data;
+            } else if (source === 'params') {
+                request.params = result.data;
+            } else {
+                request.query = result.data;
+            }
+
+            done();
+        } catch (error) {
+            logger.error('Erreur lors de la validation:', error);
+            reply.status(500).send({
+                success: false,
+                message: 'Erreur interne lors de la validation',
+                data: {},
+                statusCode: 500,
+            });
+        }
+    };
+}
+```
+
+2. **Utilisation avec les Routes**
+    - Appliquer le middleware de validation aux routes
+    - Utiliser les schémas appropriés pour chaque partie de la requête
+
+```typescript
+// src/routes/userRoutes.ts
+import { userController } from '@/controllers/userController';
+import { validateRequest } from '@/middleware/validation';
+import {
+    createUserSchema,
+    getUserSchema,
+    getUsersQuerySchema,
+    updateUserSchema,
+} from '@/validators/userValidator';
+
+import { FastifyInstance } from 'fastify';
+
+export function userRoutes(fastify: FastifyInstance) {
+    // Récupérer tous les utilisateurs (validation des paramètres de requête)
+    fastify.get('/', {
+        preHandler: validateRequest(getUsersQuerySchema, 'query'),
+        handler: userController.getAllUsers,
+    });
+
+    // Récupérer un utilisateur par ID (validation des paramètres)
+    fastify.get('/:id', {
+        preHandler: validateRequest(getUserSchema, 'params'),
+        handler: userController.getUserById,
+    });
+
+    // Créer un utilisateur (validation du corps)
+    fastify.post('/', {
+        preHandler: validateRequest(createUserSchema, 'body'),
+        handler: userController.createUser,
+    });
+
+    // Mettre à jour un utilisateur (validation des paramètres et du corps)
+    fastify.put('/:id', {
+        preHandler: [
+            validateRequest(getUserSchema, 'params'),
+            validateRequest(updateUserSchema, 'body'),
+        ],
+        handler: userController.updateUser,
+    });
+
+    // Supprimer un utilisateur (validation des paramètres)
+    fastify.delete('/:id', {
+        preHandler: validateRequest(getUserSchema, 'params'),
+        handler: userController.deleteUser,
+    });
+}
+```
+
+3. **Intégration avec AsyncHandler**
+    - Combiner la validation et la gestion des erreurs asynchrones
+    - Simplifier le code des contrôleurs
+
+```typescript
+// src/utils/asyncHandler.ts
+import { logger } from '@/utils/logger';
+
+import { FastifyReply, FastifyRequest } from 'fastify';
+import { ZodSchema } from 'zod';
+
+interface AsyncHandlerOptions<B = any, P = any, Q = any> {
+    bodySchema?: ZodSchema<B>;
+    paramsSchema?: ZodSchema<P>;
+    querySchema?: ZodSchema<Q>;
+    handler: (request: FastifyRequest, reply: FastifyReply) => Promise<any>;
+}
+
+export function asyncHandler<B = any, P = any, Q = any>({
+    bodySchema,
+    paramsSchema,
+    querySchema,
+    handler,
+}: AsyncHandlerOptions<B, P, Q>) {
+    return async (request: FastifyRequest, reply: FastifyReply) => {
+        try {
+            // Validation du corps
+            if (bodySchema) {
+                const result = bodySchema.safeParse(request.body);
+                if (!result.success) {
+                    return reply.status(400).send({
+                        success: false,
+                        message: 'Données invalides',
+                        data: { errors: formatZodErrors(result.error) },
+                        statusCode: 400,
+                    });
+                }
+                request.body = result.data;
+            }
+
+            // Validation des paramètres
+            if (paramsSchema) {
+                const result = paramsSchema.safeParse(request.params);
+                if (!result.success) {
+                    return reply.status(400).send({
+                        success: false,
+                        message: 'Paramètres invalides',
+                        data: { errors: formatZodErrors(result.error) },
+                        statusCode: 400,
+                    });
+                }
+                request.params = result.data;
+            }
+
+            // Validation des paramètres de requête
+            if (querySchema) {
+                const result = querySchema.safeParse(request.query);
+                if (!result.success) {
+                    return reply.status(400).send({
+                        success: false,
+                        message: 'Paramètres de requête invalides',
+                        data: { errors: formatZodErrors(result.error) },
+                        statusCode: 400,
+                    });
+                }
+                request.query = result.data;
+            }
+
+            // Exécution du handler
+            return await handler(request, reply);
+        } catch (error) {
+            logger.error('Erreur dans le handler:', error);
+            return reply.status(500).send({
+                success: false,
+                message: error.message || 'Une erreur est survenue',
+                data: {},
+                statusCode: 500,
+            });
+        }
+    };
+}
+
+// Fonction utilitaire pour formater les erreurs Zod
+function formatZodErrors(error: any): Record<string, string> {
+    const errors: Record<string, string> = {};
+    for (const err of error.errors) {
+        errors[err.path.join('.')] = err.message;
+    }
+    return errors;
+}
+```
+
+## Bonnes Pratiques
+
+1. **Messages d'Erreur**
+    - Fournir des messages d'erreur clairs et informatifs
+    - Localiser les messages en français
+    - Être spécifique sur la raison de l'erreur
+
+```typescript
+// Bons exemples de messages d'erreur
+const userSchema = z.object({
+    email: z.string().email("L'adresse email n'est pas valide"),
+    password: z.string().min(8, 'Le mot de passe doit contenir au moins 8 caractères'),
+    age: z.number().min(18, 'Vous devez avoir au moins 18 ans'),
+    phone: z.string().regex(/^\+?[0-9]{10,15}$/, "Le numéro de téléphone n'est pas valide"),
+});
+```
+
+2. **Validation Stricte**
+    - Utiliser l'option `.strict()` pour empêcher les propriétés inconnues
+    - Éviter les injections de propriétés non attendues
+
+```typescript
+// Schéma strict qui rejette les propriétés inconnues
+const userSchema = z.object({
+    email: z.string().email(),
+    name: z.string(),
+    age: z.number().optional()
+}).strict();
+
+// Schéma qui accepte les propriétés supplémentaires mais ne les conserve pas
+const userSchema = z.object({
+    email: z.string().email(),
+    name: z.string(),
+    age: z.number().optional()
+}).strip();
+```
+
+3. **Séparation des Préoccupations**
+
+    - Séparer la validation des données de la logique métier
+    - Les validateurs doivent se concentrer uniquement sur la validation des entrées
+    - Déléguer les validations complexes nécessitant des accès à la base de données aux services
+
+4. **Documentation**
+
+    - Documenter les schémas de validation
+    - Expliquer les règles métier complexes
+    - Maintenir une cohérence avec la documentation de l'API
+
+5. **Tests**
+    - Tester les schémas de validation avec des cas valides et invalides
+    - Vérifier que les erreurs sont correctement générées
+    - Tester les transformations de données
+
+```typescript
+// Exemple de test pour un schéma de validation
+describe('userValidator', () => {
+    describe('createUserSchema', () => {
+        it('should validate a valid user', () => {
+            const validUser = {
+                email: 'user@example.com',
+                password: 'Password123',
+                firstName: 'John',
+                lastName: 'Doe',
+            };
+
+            const result = createUserSchema.safeParse(validUser);
+            expect(result.success).toBe(true);
+        });
+
+        it('should reject an invalid email', () => {
+            const invalidUser = {
+                email: 'invalid-email',
+                password: 'Password123',
+                firstName: 'John',
+                lastName: 'Doe',
+            };
+
+            const result = createUserSchema.safeParse(invalidUser);
+            expect(result.success).toBe(false);
+
+            if (!result.success) {
+                const errors = result.error.flatten().fieldErrors;
+                expect(errors.email).toBeDefined();
+            }
+        });
+
+        it('should reject a weak password', () => {
+            const invalidUser = {
+                email: 'user@example.com',
+                password: 'weak',
+                firstName: 'John',
+                lastName: 'Doe',
+            };
+
+            const result = createUserSchema.safeParse(invalidUser);
+            expect(result.success).toBe(false);
+
+            if (!result.success) {
+                const errors = result.error.flatten().fieldErrors;
+                expect(errors.password).toBeDefined();
+            }
+        });
+    });
+});
+```
+
+## Anti-Patterns à Éviter
+
+1. **Validation Insuffisante**
+
+    - Ne pas se contenter de vérifier les types de base
+    - Valider également les contraintes métier (longueurs, formats, etc.)
+    - Éviter de faire confiance aux données entrantes
+
+2. **Duplication des Règles de Validation**
+
+    - Éviter de répéter les mêmes règles dans différents schémas
+    - Utiliser des schémas de base réutilisables
+    - Centraliser les définitions de règles communes
+
+3. **Messages d'Erreur Génériques**
+
+    - Éviter les messages d'erreur trop génériques
+    - Fournir des informations précises sur la raison de l'erreur
+    - Aider l'utilisateur à corriger les données invalides
+
+4. **Validation dans les Contrôleurs**
+
+    - Éviter de mettre la logique de validation directement dans les contrôleurs
+    - Utiliser des validateurs dédiés et des middlewares de validation
+    - Séparer la validation des données de la logique métier
+
+5. **Contournement des Validations**
+    - Ne jamais contourner les validations, même pour des cas spéciaux
+    - Adapter les schémas plutôt que de désactiver les validations
+    - Maintenir une cohérence dans l'application des règles de validation

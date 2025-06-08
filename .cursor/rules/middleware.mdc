@@ -1,0 +1,335 @@
+---
+description: Ce guide présente les bonnes pratiques pour les middlewares dans notre application Fastify.
+globs: src/middleware/**/*.ts
+---
+
+# Bonnes Pratiques pour les Middlewares
+
+## Rôle des Middlewares
+
+Les middlewares sont responsables de:
+
+1. Intercepter les requêtes et réponses HTTP
+2. Effectuer des opérations transversales (authentification, logging, validation, etc.)
+3. Enrichir ou transformer les requêtes/réponses
+4. Implémenter des contrôles de sécurité et d'accès
+
+Ils interviennent avant ou après le traitement principal d'une requête par les contrôleurs.
+
+## Structure Standard
+
+```typescript
+import { logger } from '@/utils/logger';
+
+import { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
+
+/**
+ * Middleware pour vérifier l'authentification
+ * @param request - La requête Fastify
+ * @param reply - La réponse Fastify
+ * @param done - Fonction de callback pour continuer le traitement
+ */
+export function authMiddleware(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    done: HookHandlerDoneFunction
+): void {
+    try {
+        // Vérification du token d'authentification
+        const token = request.headers.authorization?.split(' ')[1];
+
+        if (!token) {
+            reply.status(401).send({
+                success: false,
+                message: 'Authentification requise',
+                data: {},
+                statusCode: 401,
+            });
+            return;
+        }
+
+        // Vérification et décodage du token...
+        const decodedUser = verifyToken(token);
+
+        // Enrichissement de la requête avec les données utilisateur
+        request.user = decodedUser;
+
+        // Continuer le traitement de la requête
+        done();
+    } catch (error) {
+        logger.error("Erreur d'authentification:", error);
+        reply.status(401).send({
+            success: false,
+            message: 'Token invalide ou expiré',
+            data: {},
+            statusCode: 401,
+        });
+    }
+}
+```
+
+## Types de Middlewares
+
+1. **Middleware Global**
+    - S'applique à toutes les requêtes
+    - Exemples: logging, CORS, compression, rate limiting
+
+```typescript
+// Application d'un middleware global
+app.addHook('onRequest', (request, reply, done) => {
+    // Traitement global pour toutes les requêtes
+    done();
+});
+```
+
+2. **Middleware de Route**
+    - S'applique à des routes spécifiques
+    - Exemples: authentification, autorisation, validation
+
+```typescript
+// Application d'un middleware sur une route spécifique
+app.get(
+    '/protected-resource',
+    { preHandler: [authMiddleware, roleCheckMiddleware] },
+    (request, reply) => {
+        // Handler principal
+    }
+);
+```
+
+3. **Middleware Fonctionnel**
+    - Implémente une fonctionnalité spécifique
+    - Exemple: validation, upload de fichiers, rate limiting
+
+```typescript
+// Middleware de validation avec Zod
+export function validateZod(schema: ZodSchema, source: 'body' | 'params' | 'query' = 'body') {
+    return (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => {
+        try {
+            const data = request[source];
+            schema.parse(data);
+            done();
+        } catch (error) {
+            if (error instanceof ZodError) {
+                reply.status(400).send({
+                    success: false,
+                    message: 'Données invalides',
+                    data: error.errors,
+                    statusCode: 400,
+                });
+            } else {
+                reply.status(500).send({
+                    success: false,
+                    message: 'Erreur de validation',
+                    data: {},
+                    statusCode: 500,
+                });
+            }
+        }
+    };
+}
+```
+
+## Middlewares d'Authentification et Autorisation
+
+1. **Authentification**
+    - Vérifier l'identité de l'utilisateur
+    - Enrichir la requête avec les informations utilisateur
+
+```typescript
+export function isAuthenticated(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    done: HookHandlerDoneFunction
+): void {
+    const token = request.headers.authorization?.split(' ')[1];
+
+    if (!token) {
+        reply.status(401).send({
+            success: false,
+            message: 'Authentification requise',
+            data: {},
+            statusCode: 401,
+        });
+        return;
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as User;
+        request.user = decoded;
+        done();
+    } catch (error) {
+        reply.status(401).send({
+            success: false,
+            message: 'Token invalide ou expiré',
+            data: {},
+            statusCode: 401,
+        });
+    }
+}
+```
+
+2. **Autorisation**
+    - Vérifier les permissions de l'utilisateur
+    - Contrôler l'accès aux ressources
+
+```typescript
+export function hasRole(role: Role) {
+    return (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void => {
+        // Assumer que isAuthenticated a déjà été exécuté
+        const user = request.user;
+
+        if (!user) {
+            reply.status(401).send({
+                success: false,
+                message: 'Authentification requise',
+                data: {},
+                statusCode: 401,
+            });
+            return;
+        }
+
+        const roles = JSON.parse(user.roles);
+
+        if (!roles.includes(role)) {
+            reply.status(403).send({
+                success: false,
+                message: 'Accès non autorisé',
+                data: {},
+                statusCode: 403,
+            });
+            return;
+        }
+
+        done();
+    };
+}
+```
+
+## Middlewares de Validation des Requêtes
+
+```typescript
+import { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
+import { ZodSchema, z } from 'zod';
+
+export function validateRequest(schema: ZodSchema, part: 'body' | 'query' | 'params') {
+    return (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => {
+        try {
+            const data =
+                part === 'body' ? request.body : part === 'query' ? request.query : request.params;
+            const result = schema.safeParse(data);
+
+            if (!result.success) {
+                reply.status(400).send({
+                    success: false,
+                    message: 'Données invalides',
+                    data: result.error.errors,
+                    statusCode: 400,
+                });
+                return;
+            }
+
+            // Optionnel: remplacer les données par les données validées
+            if (part === 'body') {
+                request.body = result.data;
+            } else if (part === 'query') {
+                request.query = result.data;
+            } else {
+                request.params = result.data;
+            }
+
+            done();
+        } catch (error) {
+            reply.status(500).send({
+                success: false,
+                message: 'Erreur de validation',
+                data: {},
+                statusCode: 500,
+            });
+        }
+    };
+}
+```
+
+## Middleware d'Erreur Global
+
+```typescript
+export function errorHandler(app: FastifyInstance): void {
+    app.setErrorHandler((error, request, reply) => {
+        // Journaliser l'erreur
+        app.log.error(error);
+
+        // Déterminer le statut HTTP approprié
+        let statusCode = error.statusCode || 500;
+        let message = error.message || 'Une erreur est survenue';
+
+        // Gérer spécifiquement les erreurs de validation
+        if (error.validation) {
+            statusCode = 400;
+            message = 'Données invalides';
+        }
+
+        // Envoyer une réponse d'erreur standardisée
+        reply.status(statusCode).send({
+            success: false,
+            message,
+            data: {},
+            statusCode,
+        });
+    });
+}
+```
+
+## Bonnes Pratiques
+
+1. **Séparation des Préoccupations**
+
+    - Chaque middleware doit avoir une responsabilité unique et bien définie
+    - Éviter les middlewares qui font trop de choses
+
+2. **Performance**
+
+    - Les middlewares s'exécutent à chaque requête, ils doivent être légers et efficaces
+    - Éviter les opérations bloquantes ou longues
+    - Utiliser le caching quand c'est possible pour les opérations coûteuses
+
+3. **Gestion des Erreurs**
+
+    - Toujours gérer les erreurs dans les middlewares
+    - Utiliser try/catch pour éviter les crashs d'application
+    - Fournir des messages d'erreur clairs et informatifs
+
+4. **Chaînage de Middlewares**
+
+    - Organiser les middlewares en chaîne logique (auth -> validation -> traitement)
+    - S'assurer que chaque middleware appelle `done()` ou la fonction suivante
+
+5. **Tests**
+    - Tester les middlewares de manière isolée
+    - Simuler différents scénarios: requêtes valides, requêtes invalides, erreurs
+
+## Anti-Patterns à Éviter
+
+1. **Middlewares Monolithiques**
+
+    - Éviter de créer des middlewares qui font trop de choses
+    - Préférer plusieurs middlewares spécialisés à un seul middleware complexe
+
+2. **État Global**
+
+    - Éviter de stocker des états dans des variables globales
+    - Utiliser le contexte de la requête pour partager des données entre middlewares
+
+3. **Oublier d'Appeler `done()`**
+
+    - Toujours appeler `done()` ou la fonction suivante dans la chaîne
+    - Sinon, la requête reste bloquée et peut finir en timeout
+
+4. **Logique Métier dans les Middlewares**
+
+    - Les middlewares ne doivent pas contenir de logique métier complexe
+    - Déléguer la logique métier aux services appropriés
+
+5. **Manque de Logging**
+    - Les erreurs dans les middlewares doivent être journalisées
+    - Le logging aide à identifier les problèmes en production

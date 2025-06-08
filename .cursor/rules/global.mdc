@@ -1,0 +1,297 @@
+---
+description: Ce guide présente les bonnes pratiques globales à suivre pour l'ensemble du code TypeScript dans notre projet.
+globs: **/*.ts, **/*.js
+---
+
+# Bonnes Pratiques Globales TypeScript
+
+## Architecture et Organisation
+
+1. **Structure du Projet**
+
+    - Suivre une architecture modulaire basée sur les domaines
+    - Séparer clairement les responsabilités entre les couches (controllers, services, repositories, etc.)
+    - Utiliser l'importation avec des alias pour les chemins (@/services, @/utils, etc.)
+
+2. **Conventions de Nommage**
+    - Utiliser la casse camelCase pour les variables, fonctions et méthodes
+    - Utiliser la casse PascalCase pour les classes, interfaces et types
+    - Utiliser la casse snake_case pour les fichiers de configuration
+    - Utiliser des noms descriptifs qui expliquent clairement l'intention
+
+## Patterns et Principes
+
+```typescript
+// Exemple de singleton pattern
+class Service {
+    private static instance: Service;
+
+    private constructor() {}
+
+    public static getInstance(): Service {
+        if (!Service.instance) {
+            Service.instance = new Service();
+        }
+        return Service.instance;
+    }
+}
+
+// Exemple de factory pattern
+interface Product {}
+
+class ConcreteProduct implements Product {}
+
+class ProductFactory {
+    createProduct(): Product {
+        return new ConcreteProduct();
+    }
+}
+```
+
+1. **SOLID Principles**
+
+    - Single Responsibility Principle: Une classe ne doit avoir qu'une seule responsabilité
+    - Open/Closed Principle: Les entités doivent être ouvertes à l'extension mais fermées à la modification
+    - Liskov Substitution Principle: Les sous-classes doivent être substituables à leurs classes parentes
+    - Interface Segregation Principle: Préférer plusieurs interfaces spécifiques plutôt qu'une interface générale
+    - Dependency Inversion Principle: Dépendre des abstractions, pas des implémentations
+
+2. **Design Patterns Recommandés**
+    - Repository Pattern pour l'accès aux données
+    - Service Pattern pour la logique métier
+    - Singleton pour les instances uniques
+    - Factory pour la création d'objets
+    - Dependency Injection pour le découplage
+
+## TypeScript Spécifique
+
+1. **Types et Interfaces**
+    - Définir des interfaces ou des types pour toutes les structures de données
+    - Utiliser des generics pour créer des composants réutilisables
+    - Éviter l'utilisation de `any` sauf en cas d'absolue nécessité
+    - Utiliser des types d'union pour les valeurs limitées
+
+```typescript
+// Préférer ceci
+type UserRole = 'admin' | 'user' | 'guest';
+
+// À cela
+const userRole: string = 'admin';
+```
+
+2. **Type Guards et Assertions**
+    - Utiliser des type guards pour valider les types au runtime
+    - Éviter les assertions de type (`as`) quand possible
+    - Utiliser des interfaces discriminées pour le pattern matching
+
+```typescript
+// Type guard
+function isString(value: unknown): value is string {
+    return typeof value === 'string';
+}
+
+// Interface discriminée
+interface AdminAction {
+    type: 'admin';
+    adminId: string;
+}
+
+interface UserAction {
+    type: 'user';
+    userId: string;
+}
+
+type Action = AdminAction | UserAction;
+
+function handleAction(action: Action) {
+    switch (action.type) {
+        case 'admin':
+            // action est de type AdminAction ici
+            console.log(action.adminId);
+            break;
+        case 'user':
+            // action est de type UserAction ici
+            console.log(action.userId);
+            break;
+    }
+}
+```
+
+## Gestion des Erreurs
+
+1. **Création d'Erreurs Personnalisées**
+    - Créer des classes d'erreur spécifiques héritant de Error
+    - Capturer les erreurs au niveau approprié
+    - Journaliser toutes les erreurs importantes
+
+```typescript
+class NotFoundError extends Error {
+    statusCode = 404;
+
+    constructor(message: string) {
+        super(message);
+        this.name = 'NotFoundError';
+    }
+}
+
+class ValidationError extends Error {
+    statusCode = 400;
+    details: Record<string, string>;
+
+    constructor(message: string, details: Record<string, string>) {
+        super(message);
+        this.name = 'ValidationError';
+        this.details = details;
+    }
+}
+
+// Utilisation
+try {
+    // code qui peut lever une erreur
+} catch (error) {
+    if (error instanceof NotFoundError) {
+        // gérer l'erreur NotFound
+    } else if (error instanceof ValidationError) {
+        // gérer l'erreur de validation
+    } else {
+        // gérer les autres erreurs
+    }
+}
+```
+
+2. **Gestion des Promesses**
+    - Utiliser async/await plutôt que les chaînes de promesses
+    - Toujours gérer les rejets de promesses avec try/catch
+    - Éviter les promesses imbriquées
+
+## Bonnes Pratiques de Codage
+
+1. **Fonctions et Méthodes**
+    - Limiter la taille des fonctions (max 25-30 lignes)
+    - Suivre le principe de responsabilité unique
+    - Utiliser des noms descriptifs qui expliquent l'intention
+    - Documenter les fonctions avec JSDoc
+
+```typescript
+/**
+ * Calcule le total des prix des articles
+ * @param items - Liste des articles
+ * @param applyDiscount - Si true, applique une réduction de 10%
+ * @returns Le prix total calculé
+ */
+function calculateTotal(items: Item[], applyDiscount: boolean = false): number {
+    const sum = items.reduce((total, item) => total + item.price, 0);
+    return applyDiscount ? sum * 0.9 : sum;
+}
+```
+
+2. **Variables et Constants**
+
+    - Utiliser `const` par défaut, `let` si la valeur doit changer, jamais `var`
+    - Initialiser les variables au moment de leur déclaration
+    - Utiliser des noms descriptifs en fonction de leur usage
+
+3. **Imports et Exports**
+    - Regrouper les imports par type (npm, internes, relatifs)
+    - Utiliser les imports nommés plutôt que les imports par défaut
+    - Organiser les imports alphabétiquement
+    - Créer des fichiers index.ts pour regrouper les exports
+
+```typescript
+// Imports externes
+// Imports internes (avec alias)
+import { userService } from '@/services/userService';
+import { jsonResponse } from '@/utils/jsonResponse';
+
+import { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+
+// Imports relatifs
+import { UserValidator } from './userValidator';
+```
+
+## Asynchronicité
+
+1. **Async/Await**
+    - Préférer async/await aux callbacks et aux promesses chaînées
+    - Toujours utiliser try/catch avec async/await
+    - Éviter les fonctions async sans await
+
+```typescript
+// Bon exemple
+async function fetchAndProcessData() {
+    try {
+        const data = await fetchData();
+        return processData(data);
+    } catch (error) {
+        logger.error('Erreur lors du traitement des données', error);
+        throw error;
+    }
+}
+
+// Mauvais exemple
+function fetchAndProcessData() {
+    return fetchData()
+        .then(data => processData(data))
+        .catch(error => {
+            logger.error('Erreur lors du traitement des données', error);
+            throw error;
+        });
+}
+```
+
+2. **Gestion des Opérations Parallèles**
+    - Utiliser Promise.all pour les opérations parallèles
+    - Utiliser Promise.allSettled quand toutes les promesses doivent être résolues
+
+```typescript
+async function fetchMultipleResources() {
+    try {
+        const [users, products] = await Promise.all([fetchUsers(), fetchProducts()]);
+        return { users, products };
+    } catch (error) {
+        // Gestion d'erreur
+    }
+}
+```
+
+## Sécurité et Performances
+
+1. **Sécurité**
+
+    - Valider toutes les entrées utilisateur
+    - Échapper les données sensibles dans les logs
+    - Utiliser des mécanismes sécurisés pour l'authentification
+    - Ne jamais exposer d'informations sensibles dans les réponses API
+
+2. **Performance**
+    - Éviter les boucles imbriquées pour les grandes collections
+    - Préférer les méthodes fonctionnelles (map, filter, reduce) aux boucles for
+    - Mettre en cache les résultats coûteux à calculer
+    - Optimiser les requêtes de base de données (indexes, pagination)
+
+## Tests
+
+1. **Tests Unitaires**
+
+    - Tester chaque unité de code individuellement
+    - Utiliser des mocks pour isoler le code testé
+    - Couvrir les cas d'erreur et les cas limites
+
+2. **Tests d'Intégration**
+    - Tester l'interaction entre les composants
+    - Utiliser des fixtures pour préparer l'environnement
+    - Tester les cas d'utilisation complets
+
+## Documentation
+
+1. **Code**
+
+    - Utiliser JSDoc pour documenter les fonctions, classes et interfaces complexes
+    - Ajouter des commentaires pour expliquer le "pourquoi", pas le "quoi"
+    - Maintenir des README.md à jour pour chaque module
+
+2. **API**
+    - Documenter toutes les API avec Swagger/OpenAPI
+    - Inclure des exemples pour chaque endpoint
+    - Documenter les codes d'erreur et leurs significations

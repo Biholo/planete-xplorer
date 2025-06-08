@@ -1,0 +1,629 @@
+---
+description: Ce guide présente les bonnes pratiques pour les utilitaires dans notre application.
+globs: src/utils/**/*.ts
+---
+
+# Bonnes Pratiques pour les Utilitaires
+
+## Rôle des Utilitaires
+
+Les utilitaires sont responsables de:
+
+1. Fournir des fonctions réutilisables à travers l'application
+2. Encapsuler des opérations courantes et répétitives
+3. Abstraire des fonctionnalités techniques communes
+4. Améliorer la lisibilité et la maintenabilité du code
+5. Éviter la duplication de code
+
+Ils servent de boîte à outils pour les autres composants de l'application.
+
+## Structure et Organisation
+
+1. **Organisation des Fichiers**
+
+    - Regrouper les utilitaires par domaine fonctionnel
+    - Créer des fichiers distincts pour chaque catégorie d'utilitaires
+    - Utiliser des noms explicites pour les fichiers (ex: `dateUtils.ts`, `stringUtils.ts`)
+
+2. **Exports**
+    - Exporter les fonctions individuellement pour faciliter l'importation sélective
+    - Créer un fichier index.ts pour centraliser les exports si nécessaire
+
+```typescript
+// src/utils/index.ts
+export * from './dateUtils';
+export * from './stringUtils';
+export * from './objectUtils';
+// ...
+```
+
+## Types d'Utilitaires Courants
+
+### 1. Utilitaires de Format et Transformation
+
+```typescript
+// src/utils/dateUtils.ts
+import { differenceInYears, format, parseISO } from 'date-fns';
+import { fr } from 'date-fns/locale';
+
+/**
+ * Formate une date en format local français
+ * @param date - Date à formater (string ISO ou objet Date)
+ * @param formatStr - Format à utiliser (par défaut: dd/MM/yyyy)
+ * @returns Date formatée en chaîne de caractères
+ */
+export function formatDate(date: string | Date, formatStr: string = 'dd/MM/yyyy'): string {
+    if (!date) return '';
+
+    const dateObj = typeof date === 'string' ? parseISO(date) : date;
+    return format(dateObj, formatStr, { locale: fr });
+}
+
+/**
+ * Calcule l'âge en années à partir d'une date de naissance
+ * @param birthDate - Date de naissance (string ISO ou objet Date)
+ * @returns Âge en années
+ */
+export function calculateAge(birthDate: string | Date): number {
+    if (!birthDate) return 0;
+
+    const dateObj = typeof birthDate === 'string' ? parseISO(birthDate) : birthDate;
+    return differenceInYears(new Date(), dateObj);
+}
+```
+
+### 2. Utilitaires HTTP et API
+
+```typescript
+// src/utils/apiUtils.ts
+import { FastifyReply } from 'fastify';
+
+/**
+ * Interface pour la réponse JSON standardisée
+ */
+interface JsonResponseData {
+    success: boolean;
+    message: string;
+    data: any;
+    statusCode: number;
+}
+
+/**
+ * Envoie une réponse JSON standardisée
+ * @param reply - Objet réponse Fastify
+ * @param message - Message à inclure dans la réponse
+ * @param data - Données à inclure dans la réponse
+ * @param statusCode - Code de statut HTTP (défaut: 200)
+ * @returns Réponse Fastify
+ */
+export function jsonResponse(
+    reply: FastifyReply,
+    message: string,
+    data: any = {},
+    statusCode: number = 200
+): FastifyReply {
+    const response: JsonResponseData = {
+        success: statusCode < 400,
+        message,
+        data,
+        statusCode,
+    };
+
+    return reply.status(statusCode).send(response);
+}
+
+/**
+ * Gère les erreurs asynchrones dans les handlers Fastify
+ * @param handler - Fonction handler à envelopper
+ * @returns Fonction handler avec gestion d'erreur
+ */
+export const asyncHandler = (handler: Function) => {
+    return async (request: any, reply: any) => {
+        try {
+            return await handler(request, reply);
+        } catch (error) {
+            console.error(error);
+            return jsonResponse(
+                reply,
+                error.message || 'Une erreur est survenue',
+                {},
+                error.statusCode || 500
+            );
+        }
+    };
+};
+```
+
+### 3. Utilitaires de Sécurité
+
+```typescript
+// src/utils/securityUtils.ts
+import bcrypt from 'bcrypt';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+
+/**
+ * Hache un mot de passe
+ * @param password - Mot de passe en clair
+ * @returns Mot de passe haché
+ */
+export async function hashPassword(password: string): Promise<string> {
+    const saltRounds = 10;
+    return bcrypt.hash(password, saltRounds);
+}
+
+/**
+ * Vérifie un mot de passe
+ * @param password - Mot de passe en clair
+ * @param hash - Hash du mot de passe
+ * @returns true si le mot de passe correspond, false sinon
+ */
+export async function verifyPassword(password: string, hash: string): Promise<boolean> {
+    return bcrypt.compare(password, hash);
+}
+
+/**
+ * Génère un token JWT
+ * @param payload - Données à inclure dans le token
+ * @param expiresIn - Durée de validité du token (par défaut: 24h)
+ * @returns Token JWT généré
+ */
+export function generateJWT(payload: object, expiresIn: string = '24h'): string {
+    return jwt.sign(payload, process.env.JWT_SECRET!, {
+        expiresIn,
+    });
+}
+
+/**
+ * Vérifie et décode un token JWT
+ * @param token - Token JWT à vérifier
+ * @returns Payload décodé ou null si le token est invalide
+ */
+export function verifyJWT(token: string): any {
+    try {
+        return jwt.verify(token, process.env.JWT_SECRET!);
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * Génère une chaîne aléatoire sécurisée
+ * @param length - Longueur de la chaîne (par défaut: 32)
+ * @returns Chaîne aléatoire
+ */
+export function generateRandomToken(length: number = 32): string {
+    return crypto.randomBytes(length).toString('hex');
+}
+```
+
+### 4. Utilitaires de Validation et Traitement des Données
+
+```typescript
+// src/utils/validationUtils.ts
+import { ZodError, ZodSchema } from 'zod';
+
+/**
+ * Valide des données avec un schéma Zod
+ * @param schema - Schéma de validation Zod
+ * @param data - Données à valider
+ * @returns Objet avec les données validées ou les erreurs
+ */
+export function validateWithZod<T>(
+    schema: ZodSchema<T>,
+    data: any
+): {
+    success: boolean;
+    data?: T;
+    errors?: Record<string, string>;
+} {
+    try {
+        const validatedData = schema.parse(data);
+        return {
+            success: true,
+            data: validatedData,
+        };
+    } catch (error) {
+        if (error instanceof ZodError) {
+            const errorMap: Record<string, string> = {};
+
+            error.errors.forEach((err) => {
+                const path = err.path.join('.');
+                errorMap[path] = err.message;
+            });
+
+            return {
+                success: false,
+                errors: errorMap,
+            };
+        }
+
+        throw error;
+    }
+}
+
+/**
+ * Sanitize un objet en supprimant les propriétés spécifiées
+ * @param obj - Objet à nettoyer
+ * @param fieldsToRemove - Champs à supprimer
+ * @returns Objet nettoyé
+ */
+export function sanitizeObject<T extends object>(obj: T, fieldsToRemove: string[]): Partial<T> {
+    const result = { ...obj };
+
+    fieldsToRemove.forEach((field) => {
+        delete result[field as keyof T];
+    });
+
+    return result;
+}
+```
+
+### 5. Utilitaires de Logging
+
+```typescript
+// src/utils/logger.ts
+import pino from 'pino';
+
+const logLevel = process.env.NODE_ENV === 'production' ? 'info' : 'debug';
+
+export const logger = pino({
+    level: logLevel,
+    transport: {
+        target: 'pino-pretty',
+        options: {
+            colorize: true,
+            translateTime: 'SYS:standard',
+            ignore: 'pid,hostname',
+        },
+    },
+    serializers: {
+        req: (req) => ({
+            method: req.method,
+            url: req.url,
+            headers: {
+                'user-agent': req.headers['user-agent'],
+            },
+        }),
+        res: (res) => ({
+            statusCode: res.statusCode,
+        }),
+        error: pino.stdSerializers.err,
+    },
+});
+
+/**
+ * Logger enrichi avec des informations contextuelles
+ * @param context - Contexte du logger (nom du module)
+ * @returns Logger avec contexte
+ */
+export function createContextLogger(context: string) {
+    return logger.child({ context });
+}
+```
+
+## Principes de Conception
+
+1. **Fonctions Pures**
+    - Privilégier les fonctions pures sans effets de bord
+    - Les fonctions doivent être prévisibles et faciles à tester
+    - Éviter les dépendances sur des états globaux ou externes
+
+```typescript
+// Bon exemple (fonction pure)
+function calculateTotalPrice(items: CartItem[]): number {
+    return items.reduce((total, item) => total + item.price * item.quantity, 0);
+}
+
+// Mauvais exemple (dépendance externe, effet de bord)
+function calculateTotalPrice(cartId: string): number {
+    const items = global.carts.get(cartId); // Dépendance externe
+    let total = 0;
+    for (const item of items) {
+        total += item.price * item.quantity;
+    }
+    global.lastCalculatedTotal = total; // Effet de bord
+    return total;
+}
+```
+
+2. **Interface Cohérente**
+    - Adopter une interface cohérente pour les fonctions similaires
+    - Utiliser des noms et des signatures de fonction cohérents
+    - Favoriser les paramètres nommés pour les fonctions complexes
+
+```typescript
+// Interface cohérente pour les fonctions de formatage
+function formatDate(date: Date, format?: string): string {
+    /* ... */
+}
+function formatNumber(num: number, options?: NumberFormatOptions): string {
+    /* ... */
+}
+function formatCurrency(amount: number, options?: CurrencyFormatOptions): string {
+    /* ... */
+}
+
+// Utiliser des objets d'options pour les paramètres complexes
+interface PaginationOptions {
+    page: number;
+    limit: number;
+    sortBy?: string;
+    sortDirection?: 'asc' | 'desc';
+}
+
+function paginate<T>(items: T[], options: PaginationOptions): PaginatedResult<T> {
+    /* ... */
+}
+```
+
+3. **Gestion des Erreurs**
+    - Gérer les erreurs de manière explicite et cohérente
+    - Documenter les erreurs potentielles dans les commentaires JSDoc
+    - Privilégier les types de retour explicites pour les cas d'erreur
+
+```typescript
+/**
+ * Divise deux nombres
+ * @param a - Numérateur
+ * @param b - Dénominateur
+ * @returns Résultat de la division ou null si division par zéro
+ * @throws Error si les paramètres ne sont pas des nombres
+ */
+function divide(a: number, b: number): number | null {
+    if (typeof a !== 'number' || typeof b !== 'number') {
+        throw new Error('Les paramètres doivent être des nombres');
+    }
+
+    if (b === 0) {
+        return null; // Cas d'erreur attendu
+    }
+
+    return a / b;
+}
+```
+
+4. **Documentation**
+    - Documenter chaque fonction avec JSDoc
+    - Inclure le rôle, les paramètres, le retour et les exceptions
+    - Ajouter des exemples pour les fonctions complexes
+
+```typescript
+/**
+ * Vérifie si une chaîne est un email valide
+ * @param email - Chaîne à vérifier
+ * @returns true si l'email est valide, false sinon
+ * @example
+ * // Retourne true
+ * isValidEmail('user@example.com')
+ *
+ * // Retourne false
+ * isValidEmail('user@example')
+ */
+export function isValidEmail(email: string): boolean {
+    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return regex.test(email);
+}
+```
+
+## Bonnes Pratiques
+
+1. **Testabilité**
+    - Concevoir les utilitaires pour être facilement testables
+    - Écrire des tests unitaires pour chaque fonction
+    - Tester les cas limites et les cas d'erreur
+
+```typescript
+// tests/utils/stringUtils.test.ts
+import { slugify, truncate } from '@/utils/stringUtils';
+
+describe('String Utils', () => {
+    describe('truncate', () => {
+        it('should truncate strings longer than maxLength', () => {
+            expect(truncate('This is a long text', 10)).toBe('This is...');
+        });
+
+        it('should not truncate strings shorter than maxLength', () => {
+            expect(truncate('Short', 10)).toBe('Short');
+        });
+
+        it('should use custom suffix if provided', () => {
+            expect(truncate('This is a long text', 10, '!!!')).toBe('This is!!!');
+        });
+    });
+
+    describe('slugify', () => {
+        it('should convert strings to slugs', () => {
+            expect(slugify('Hello World')).toBe('hello-world');
+        });
+
+        it('should handle special characters', () => {
+            expect(slugify('Écoute-moi !')).toBe('ecoute-moi');
+        });
+    });
+});
+```
+
+2. **Performance**
+    - Optimiser les fonctions fréquemment utilisées
+    - Éviter les opérations inutiles ou redondantes
+    - Utiliser des techniques de mémoisation pour les fonctions coûteuses
+
+```typescript
+// Mémoisation d'une fonction coûteuse
+const memoize = <T extends (...args: any[]) => any>(fn: T): T => {
+    const cache = new Map();
+
+    return ((...args: any[]) => {
+        const key = JSON.stringify(args);
+
+        if (cache.has(key)) {
+            return cache.get(key);
+        }
+
+        const result = fn(...args);
+        cache.set(key, result);
+        return result;
+    }) as T;
+};
+
+// Exemple d'utilisation
+export const calculateComplexValue = memoize((a: number, b: number): number => {
+    // Opération coûteuse
+    let result = 0;
+    for (let i = 0; i < 1000000; i++) {
+        result += Math.sin(a * i) * Math.cos(b * i);
+    }
+    return result;
+});
+```
+
+3. **Évolution et Maintenance**
+    - Concevoir les utilitaires pour qu'ils soient évolutifs
+    - Maintenir la compatibilité descendante lors des modifications
+    - Déprécier les fonctions obsolètes avant de les supprimer
+
+```typescript
+/**
+ * @deprecated Utilisez formatDate à la place
+ */
+export function formatDateOld(date: Date): string {
+    console.warn('formatDateOld est déprécié, utilisez formatDate à la place');
+    return formatDate(date);
+}
+```
+
+4. **Réutilisabilité**
+    - Concevoir les utilitaires pour être largement réutilisables
+    - Éviter les dépendances spécifiques à un contexte
+    - Favoriser les fonctions génériques avec des paramètres d'options
+
+## Anti-Patterns à Éviter
+
+1. **Utilitaires Trop Spécifiques**
+
+    - Éviter de créer des utilitaires trop spécifiques à un cas d'usage
+    - Solution: Concevoir des fonctions génériques et paramétrables
+
+2. **Utilitaires Stateful**
+
+    - Éviter les utilitaires qui maintiennent un état interne
+    - Solution: Privilégier les fonctions pures ou utiliser des classes appropriées
+
+3. **Duplication entre Utilitaires**
+
+    - Éviter de dupliquer des fonctionnalités similaires
+    - Solution: Refactoriser et réutiliser le code commun
+
+4. **Utilitaires Monolithiques**
+
+    - Éviter les fichiers d'utilitaires qui deviennent trop volumineux
+    - Solution: Diviser en modules cohérents et spécifiques
+
+5. **Manque de Documentation**
+    - Éviter les utilitaires sans documentation claire
+    - Solution: Documenter systématiquement avec JSDoc
+
+## Exemples Concrets d'Utilitaires Courants
+
+### Utilitaires de Chaînes de Caractères
+
+```typescript
+// src/utils/stringUtils.ts
+
+/**
+ * Tronque une chaîne à une longueur maximale
+ * @param str - Chaîne à tronquer
+ * @param maxLength - Longueur maximale
+ * @param suffix - Suffixe à ajouter en cas de troncature (défaut: '...')
+ * @returns Chaîne tronquée
+ */
+export function truncate(str: string, maxLength: number, suffix: string = '...'): string {
+    if (!str || str.length <= maxLength) return str;
+    return str.substring(0, maxLength - suffix.length) + suffix;
+}
+
+/**
+ * Convertit une chaîne en slug URL-friendly
+ * @param str - Chaîne à convertir
+ * @returns Slug
+ */
+export function slugify(str: string): string {
+    return str
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w\s-]/g, '')
+        .replace(/[\s_-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Capitalise la première lettre de chaque mot
+ * @param str - Chaîne à formater
+ * @returns Chaîne avec les premières lettres en majuscules
+ */
+export function capitalizeWords(str: string): string {
+    return str
+        .split(' ')
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+}
+```
+
+### Utilitaires d'Objets et de Collections
+
+```typescript
+// src/utils/objectUtils.ts
+
+/**
+ * Crée un nouvel objet en omettant certaines propriétés
+ * @param obj - Objet source
+ * @param keys - Clés à omettre
+ * @returns Nouvel objet sans les propriétés spécifiées
+ */
+export function omit<T extends object, K extends keyof T>(obj: T, keys: K[]): Omit<T, K> {
+    const result = { ...obj };
+    keys.forEach((key) => delete result[key]);
+    return result;
+}
+
+/**
+ * Crée un nouvel objet en ne conservant que certaines propriétés
+ * @param obj - Objet source
+ * @param keys - Clés à conserver
+ * @returns Nouvel objet avec uniquement les propriétés spécifiées
+ */
+export function pick<T extends object, K extends keyof T>(obj: T, keys: K[]): Pick<T, K> {
+    const result = {} as Pick<T, K>;
+    keys.forEach((key) => {
+        if (key in obj) {
+            result[key] = obj[key];
+        }
+    });
+    return result;
+}
+
+/**
+ * Groupe un tableau d'objets par la valeur d'une propriété
+ * @param array - Tableau d'objets
+ * @param key - Clé pour le groupement
+ * @returns Objet avec les éléments groupés
+ */
+export function groupBy<T extends object, K extends keyof T>(
+    array: T[],
+    key: K
+): Record<string, T[]> {
+    return array.reduce(
+        (result, item) => {
+            const groupKey = String(item[key]);
+            if (!result[groupKey]) {
+                result[groupKey] = [];
+            }
+            result[groupKey].push(item);
+            return result;
+        },
+        {} as Record<string, T[]>
+    );
+}
+```

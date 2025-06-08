@@ -1,0 +1,693 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: Ce guide présente les bonnes pratiques pour l'utilisation de Fastify comme framework HTTP dans notre application.
+globs: src/index.ts, src/app.ts, src/config/fastify.ts
+---
+
+# Bonnes Pratiques pour Fastify
+
+## Rôle de Fastify
+
+Fastify est un framework web haute performance pour Node.js, responsable de:
+
+1. Gérer les requêtes et réponses HTTP
+2. Router les requêtes vers les handlers appropriés
+3. Faciliter la création d'API RESTful
+4. Fournir un système de plugins extensible
+5. Valider les entrées et sorties via des schémas JSON
+
+## Structure de l'Application
+
+- Organiser l'application en modules cohérents (routes, plugins, hooks)
+- Séparer la configuration (app.ts) du démarrage du serveur (index.ts)
+- Utiliser une fonction `buildApp` pour configurer l'application
+- Centraliser la création des middlewares et plugins
+- Utiliser des variables d'environnement pour les configurations
+
+## Configuration de Base
+
+```typescript
+// src/app.ts
+import fastifyCors from '@fastify/cors';
+import fastifyHelmet from '@fastify/helmet';
+import fastifyMultipart from '@fastify/multipart';
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
+import dotenv from 'dotenv';
+import Fastify, { FastifyInstance } from 'fastify';
+
+import { errorHandlerMiddleware } from './middleware/errorHandler';
+import { authRoutes } from './routes/authRoutes';
+import { userRoutes } from './routes/userRoutes';
+import { swaggerOptions } from './utils/swaggerOptions';
+
+// Charger les variables d'environnement
+dotenv.config();
+
+export const buildApp = async (): Promise<FastifyInstance> => {
+    // Créer l'instance Fastify avec le logging approprié
+    const app = Fastify({
+        logger: {
+            level: process.env.LOG_LEVEL || 'info',
+            transport: process.env.NODE_ENV === 'development'
+                ? {
+                    target: 'pino-pretty',
+                    options: {
+                        translateTime: 'HH:MM:ss Z',
+                        ignore: 'pid,hostname',
+                        colorize: true,
+                    },
+                }
+                : undefined,
+        },
+        trustProxy: true,
+    });
+
+    // Plugins de sécurité et utilitaires
+    await app.register(fastifyHelmet);
+    await app.register(fastifyCors, {
+        origin: process.env.CORS_ORIGIN || true,
+        credentials: true,
+    });
+    await app.register(fastifyMultipart, {
+        limits: {
+            fileSize: 10 * 1024 * 1024, // 10MB
+            files: 5,
+        },
+    });
+
+    // Documentation Swagger
+    if (process.env.NODE_ENV !== 'production') {
+        await app.register(fastifySwagger, swaggerOptions);
+        await app.register(fastifySwaggerUi, {
+            routePrefix: '/documentation',
+        });
+    }
+
+    // Middleware de gestion d'erreurs
+    errorHandlerMiddleware(app);
+
+    // Route de santé
+    app.get('/health', async () => {
+        return { status: 'ok', timestamp: new Date().toISOString() };
+    });
+
+    // Enregistrer les routes API
+    app.register(authRoutes, { prefix: '/api/auth' });
+    app.register(userRoutes, { prefix: '/api/users' });
+
+    // Décorer l'instance avec des utilitaires globaux
+    app.decorate('util', {
+        // Utilitaires partagés entre les routes
+    });
+
+    return app;
+};
+
+// src/index.ts
+import { buildApp } from './app';
+
+const start = async () => {
+    const app = await buildApp();
+
+    try {
+        const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+        const host = process.env.HOST || '0.0.0.0';
+
+        await app.listen({ port, host });
+        app.log.info(`Server is running at http://${host}:${port}`);
+
+        if (process.env.NODE_ENV !== 'production') {
+            app.log.info(`Documentation available at http://${host}:${port}/documentation`);
+        }
+    } catch (err) {
+        app.log.error(err);
+        process.exit(1);
+    }
+};
+
+// Gestion des erreurs non capturées
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    process.exit(1);
+});
+
+// Démarrer le serveur
+start();
+```
+
+## Plugins Personnalisés
+
+Les plugins sont au cœur de l'architecture Fastify et permettent d'encapsuler des fonctionnalités réutilisables.
+
+```typescript
+// src/plugins/rateLimiter.ts
+import fastifyRateLimit from '@fastify/rate-limit';
+import { FastifyInstance, FastifyPluginOptions } from 'fastify';
+import fp from 'fastify-plugin';
+
+export default fp(async function (fastify: FastifyInstance, options: FastifyPluginOptions) {
+    const defaultOptions = {
+        max: 100,
+        timeWindow: '1 minute',
+        errorResponseBuilder: (request, context) => {
+            return {
+                success: false,
+                message: `Trop de requêtes. Veuillez réessayer dans ${context.after}`,
+                data: {},
+                statusCode: 429,
+            };
+        },
+    };
+
+    const finalOptions = { ...defaultOptions, ...options.rateLimit };
+
+    await fastify.register(fastifyRateLimit, finalOptions);
+
+    fastify.log.info('Rate limiter plugin registered');
+});
+
+// Utilisation dans app.ts
+await app.register(import('./plugins/rateLimiter'), {
+    rateLimit: {
+        max: 200,
+        timeWindow: '5 minutes',
+    },
+});
+```
+
+## Décoration de l'Instance Fastify
+
+Fastify permet d'ajouter des fonctionnalités à l'instance principale via la décoration.
+
+```typescript
+// src/plugins/logger.ts
+import { FastifyInstance } from 'fastify';
+import fp from 'fastify-plugin';
+
+interface LoggerOptions {
+    level: string;
+}
+
+declare module 'fastify' {
+    interface FastifyInstance {
+        appLogger: {
+            logRequest: (request: any, message: string) => void;
+            logError: (error: Error, context?: any) => void;
+        };
+    }
+}
+
+export default fp(async function (fastify: FastifyInstance, options: LoggerOptions) {
+    const appLogger = {
+        logRequest: (request, message) => {
+            fastify.log.info({
+                userId: request.user?.id,
+                path: request.url,
+                method: request.method,
+                message,
+            });
+        },
+
+        logError: (error, context = {}) => {
+            fastify.log.error({
+                error: {
+                    message: error.message,
+                    stack: error.stack,
+                    name: error.name,
+                },
+                ...context,
+            });
+        },
+    };
+
+    fastify.decorate('appLogger', appLogger);
+});
+
+// Utilisation dans une route
+app.get('/resource', (request, reply) => {
+    request.server.appLogger.logRequest(request, 'Accès à la ressource');
+    // Suite du traitement...
+});
+```
+
+## Hooks
+
+Les hooks permettent d'intervenir à différentes étapes du cycle de vie des requêtes.
+
+```typescript
+// Hooks globaux dans app.ts
+app.addHook('onRequest', (request, reply, done) => {
+    request.requestTime = Date.now();
+    done();
+});
+
+app.addHook('onResponse', (request, reply, done) => {
+    const responseTime = Date.now() - request.requestTime;
+    app.log.info(`${request.method} ${request.url} - ${reply.statusCode} - ${responseTime}ms`);
+    done();
+});
+
+// Hook pour un plugin ou une route spécifique
+export default async function routes(fastify: FastifyInstance) {
+    fastify.addHook('preHandler', (request, reply, done) => {
+        // Logique exécutée avant le handler pour toutes les routes de ce plugin
+        done();
+    });
+
+    fastify.get('/route', {
+        onRequest: (request, reply, done) => {
+            // Hook spécifique à cette route
+            done();
+        },
+        handler: async (request, reply) => {
+            // Handler
+        },
+    });
+}
+```
+
+## Gestion Avancée des Erreurs
+
+```typescript
+// src/middleware/errorHandler.ts
+import { AppError, ValidationError } from '@/utils/errors';
+
+import { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { ZodError } from 'zod';
+
+export function errorHandlerMiddleware(app: FastifyInstance): void {
+    // Hook onError pour journaliser toutes les erreurs
+    app.addHook('onError', (request, reply, error, done) => {
+        // Journaliser avec des informations contextuelle
+        request.log.error(
+            {
+                error: {
+                    message: error.message,
+                    stack: error.stack,
+                    name: error.name,
+                },
+                request: {
+                    method: request.method,
+                    url: request.url,
+                    route: request.routerPath,
+                    params: request.params,
+                    userId: request.user?.id,
+                },
+            },
+            'Erreur du serveur'
+        );
+
+        done();
+    });
+
+    // Handler d'erreur principal
+    app.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
+        // Erreurs personnalisées de l'application
+        if (error instanceof AppError) {
+            return reply.status(error.statusCode).send({
+                success: false,
+                message: error.message,
+                data: error instanceof ValidationError ? error.details : {},
+                statusCode: error.statusCode,
+            });
+        }
+
+        // Erreurs de validation Zod
+        if (error instanceof ZodError) {
+            return reply.status(400).send({
+                success: false,
+                message: 'Données invalides',
+                data: error.format(),
+                statusCode: 400,
+            });
+        }
+
+        // Erreurs de validation Fastify
+        if (error.validation) {
+            return reply.status(400).send({
+                success: false,
+                message: 'Données invalides',
+                data: error.validation,
+                statusCode: 400,
+            });
+        }
+
+        // Erreurs Prisma spécifiques
+        if (error.code === 'P2002') {
+            return reply.status(409).send({
+                success: false,
+                message: 'Une entrée avec ces données existe déjà',
+                data: {},
+                statusCode: 409,
+            });
+        }
+
+        // Erreur par défaut
+        const statusCode = error.statusCode || 500;
+        const message =
+            statusCode === 500 ? 'Une erreur inattendue est survenue' : error.message || 'Erreur';
+
+        reply.status(statusCode).send({
+            success: false,
+            message,
+            data: {},
+            statusCode,
+        });
+    });
+
+    // Handler pour les routes non trouvées
+    app.setNotFoundHandler((request, reply) => {
+        reply.status(404).send({
+            success: false,
+            message: 'Route non trouvée',
+            data: {},
+            statusCode: 404,
+        });
+    });
+}
+```
+
+## Validation avec Fastify et Zod
+
+```typescript
+// src/routes/userRoutes.ts
+import { userController } from '@/controllers/userController';
+import { isAuthenticated } from '@/middleware/auth';
+import { CreateUserSchema, UpdateUserSchema } from '@/validators/userValidator';
+
+import { FastifyInstance, FastifyPluginOptions } from 'fastify';
+
+export async function userRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
+    // Récupérer tous les utilisateurs
+    fastify.get('/', {
+        onRequest: [isAuthenticated],
+        handler: userController.getAll,
+    });
+
+    // Récupérer un utilisateur par ID
+    fastify.get('/:id', {
+        schema: {
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', format: 'uuid' },
+                },
+                required: ['id'],
+            },
+        },
+        onRequest: [isAuthenticated],
+        handler: userController.getById,
+    });
+
+    // Créer un utilisateur - Avec validation Zod
+    fastify.post('/', {
+        schema: {
+            body: {
+                type: 'object',
+                properties: CreateUserSchema.shape,
+            },
+        },
+        preHandler: async (request, reply) => {
+            try {
+                // Validation avec Zod
+                request.body = CreateUserSchema.parse(request.body);
+            } catch (error) {
+                reply.code(400).send({
+                    success: false,
+                    message: 'Données invalides',
+                    data: error.format(),
+                    statusCode: 400,
+                });
+            }
+        },
+        handler: userController.create,
+    });
+
+    // Mettre à jour un utilisateur
+    fastify.put('/:id', {
+        schema: {
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', format: 'uuid' },
+                },
+                required: ['id'],
+            },
+        },
+        onRequest: [isAuthenticated],
+        preHandler: async (request, reply) => {
+            try {
+                request.body = UpdateUserSchema.parse(request.body);
+            } catch (error) {
+                reply.code(400).send({
+                    success: false,
+                    message: 'Données invalides',
+                    data: error.format(),
+                    statusCode: 400,
+                });
+            }
+        },
+        handler: userController.update,
+    });
+
+    // Supprimer un utilisateur
+    fastify.delete('/:id', {
+        schema: {
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', format: 'uuid' },
+                },
+                required: ['id'],
+            },
+        },
+        onRequest: [isAuthenticated],
+        handler: userController.delete,
+    });
+}
+```
+
+## Tests avec Fastify
+
+```typescript
+// tests/integration/userRoutes.test.ts
+import { buildApp } from '@/app';
+import { prismaMock } from '@/testUtils/prismaMock';
+
+import { FastifyInstance } from 'fastify';
+
+describe('User Routes', () => {
+    let app: FastifyInstance;
+    let authToken: string;
+
+    beforeAll(async () => {
+        app = await buildApp();
+
+        // Connexion pour obtenir un token d'authentification
+        const loginResponse = await app.inject({
+            method: 'POST',
+            url: '/api/auth/login',
+            payload: {
+                email: 'admin@example.com',
+                password: 'password123',
+            },
+        });
+
+        const loginResult = JSON.parse(loginResponse.payload);
+        authToken = loginResult.data.accessToken;
+    });
+
+    afterAll(async () => {
+        await app.close();
+    });
+
+    describe('GET /api/users', () => {
+        it('should return all users', async () => {
+            // Mock de Prisma
+            prismaMock.user.findMany.mockResolvedValue([
+                {
+                    id: '1',
+                    email: 'user1@example.com',
+                    firstName: 'John',
+                    lastName: 'Doe',
+                },
+                {
+                    id: '2',
+                    email: 'user2@example.com',
+                    firstName: 'Jane',
+                    lastName: 'Smith',
+                },
+            ]);
+
+            // Requête avec authentification
+            const response = await app.inject({
+                method: 'GET',
+                url: '/api/users',
+                headers: {
+                    authorization: `Bearer ${authToken}`,
+                },
+            });
+
+            // Assertions
+            expect(response.statusCode).toBe(200);
+            const result = JSON.parse(response.payload);
+            expect(result.success).toBe(true);
+            expect(result.data.items.length).toBe(2);
+        });
+
+        it('should return 401 without authentication', async () => {
+            const response = await app.inject({
+                method: 'GET',
+                url: '/api/users',
+            });
+
+            expect(response.statusCode).toBe(401);
+        });
+    });
+
+    // Plus de tests...
+});
+```
+
+## Bonnes Pratiques
+
+1. **Architecture et Organisation**
+
+    - Suivre le principe de responsabilité unique pour chaque composant
+    - Utiliser un système de routage modulaire
+    - Encapsuler la logique métier dans des services
+    - Centraliser la configuration dans des fichiers dédiés
+
+2. **Performance**
+
+    - Éviter les opérations bloquantes dans les handlers
+    - Utiliser le streaming pour les fichiers volumineux
+    - Implémenter le cache pour les réponses fréquentes
+    - Activer la compression des réponses avec `@fastify/compress`
+    - Surveiller les performances avec des métriques
+
+3. **Sécurité**
+
+    - Utiliser Helmet pour sécuriser les en-têtes HTTP
+    - Configurer les CORS de manière restrictive
+    - Implémenter une authentification robuste (JWT, OAuth)
+    - Valider toutes les entrées utilisateur
+    - Mettre en place un rate limiting pour prévenir les attaques par force brute
+    - Éviter l'exposition des détails d'erreur sensibles
+
+4. **Validation et Types**
+
+    - Définir des schémas de validation pour toutes les entrées
+    - Utiliser Zod ou TypeBox pour la validation
+    - Tirer parti du système de types TypeScript
+    - Créer des interfaces dédiées pour les requêtes et réponses
+
+5. **Journalisation**
+
+    - Configurer le logger Pino de manière appropriée
+    - Structurer les logs pour faciliter l'analyse
+    - Journaliser les informations pertinentes (mais pas sensibles)
+    - Utiliser différents niveaux de log selon le contexte
+
+6. **Tests**
+
+    - Utiliser `fastify.inject()` pour les tests d'intégration
+    - Créer des fixtures et des mocks pour les dépendances
+    - Tester les cas de succès et d'échec
+    - Mettre en place des tests de charge
+
+7. **Documentation**
+
+    - Utiliser Swagger/OpenAPI pour documenter l'API
+    - Maintenir la documentation à jour avec le code
+    - Inclure des exemples de requêtes et réponses
+    - Documenter les codes d'erreur possibles
+
+8. **Environnements**
+
+    - Utiliser dotenv pour la gestion des variables d'environnement
+    - Créer des configurations différentes selon l'environnement
+    - Valider les variables d'environnement au démarrage
+
+```typescript
+// src/config/env.ts
+import dotenv from 'dotenv';
+import { z } from 'zod';
+
+// Charger les variables d'environnement
+dotenv.config();
+
+// Schéma de validation pour les variables d'environnement requises
+const envSchema = z.object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: z.string().transform(Number).default('3000'),
+    DATABASE_URL: z.string().min(1),
+    JWT_SECRET: z.string().min(32),
+    JWT_EXPIRES_IN: z.string().default('1d'),
+    CORS_ORIGIN: z.string().default('*'),
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+});
+
+// Valider les variables d'environnement
+const result = envSchema.safeParse(process.env);
+
+if (!result.success) {
+    console.error("❌ Variables d'environnement invalides:");
+    console.error(result.error.format());
+    process.exit(1);
+}
+
+// Exporter les variables typées et validées
+export const env = result.data;
+```
+
+## Anti-Patterns à Éviter
+
+1. **Route Handlers Volumineux**
+
+    - Problème: Placer trop de logique dans les handlers de route
+    - Solution: Déléguer aux contrôleurs et services appropriés
+
+2. **Callbacks Imbriqués**
+
+    - Problème: Callback hell dans le code asynchrone
+    - Solution: Utiliser async/await pour un code plus lisible
+
+3. **Absence de Validation**
+
+    - Problème: Ne pas valider les entrées utilisateur
+    - Solution: Toujours valider les requêtes avec des schémas
+
+4. **Gestion des Erreurs Inconsistante**
+
+    - Problème: Différentes approches pour gérer les erreurs
+    - Solution: Utiliser un handler d'erreurs global et des erreurs structurées
+
+5. **Middlewares Monolithiques**
+
+    - Problème: Middlewares qui font trop de choses
+    - Solution: Créer des middlewares spécifiques et composables
+
+6. **Couplage Fort**
+
+    - Problème: Dépendances directes entre composants
+    - Solution: Utiliser l'injection de dépendances et les plugins
+
+7. **Variables d'Environnement Non Validées**
+
+    - Problème: Supposer que les variables d'environnement sont correctes
+    - Solution: Valider les variables d'environnement au démarrage
+
+8. **Manque de Monitoring**
+    - Problème: Absence de métriques et de surveillance
+    - Solution: Implémenter des endpoints de santé et collecter des métriques
