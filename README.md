@@ -48,14 +48,12 @@ pnpm run prisma:generate
 
 5. **Lancer les services Docker**
 ```bash
-docker compose -f docker-compose.dev.yml -p app-fastify-dev up -d
+docker compose -f docker-compose.yaml up -d
 ```
 
    Cela lance :
    - MySQL : `localhost:3306`
    - PHPMyAdmin : `http://localhost:8080`
-   - Mailhog : `http://localhost:8025`
-   - Minio : `http://localhost:9000`
    - Loki : `http://localhost:3100`
    - Grafana : `http://localhost:3001`
 
@@ -136,7 +134,6 @@ planeteXplorer/
 - **API Backend** : `http://localhost:8000`
 - **Documentation API** : `http://localhost:8000/api`
 - **PHPMyAdmin** : `http://localhost:8080`
-- **Mailhog** : `http://localhost:8025`
 
 ## 🛠️ Commandes Utiles
 
@@ -148,10 +145,10 @@ cd backend && pnpm run prisma:all
 cd backend && pnpm run prisma:reset
 
 # Voir les logs Docker
-docker compose -f docker-compose.dev.yml logs -f
+docker compose -f docker-compose.yaml logs -f
 
 # Arrêter les services Docker
-docker compose -f docker-compose.dev.yml down
+docker compose -f docker-compose.yaml down
 ```
 
 ## 📖 Documentation
