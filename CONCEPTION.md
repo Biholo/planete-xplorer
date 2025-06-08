@@ -65,7 +65,7 @@
 - Gestion des erreurs et des réponses
 - Middleware de sécurité
 
-#### Couche d'Accès aux Données (Prisma ORM + PostgreSQL)
+#### Couche d'Accès aux Données (Prisma ORM + MySql)
 **Responsabilités :**
 - Persistance des données
 - Requêtes et transactions de base de données
@@ -218,7 +218,7 @@ Base de Données (MySql)
 ### 3. Environnement technique
 
 **Système de gestion de base de données :**
-- PostgreSQL (SGBD relationnel)
+- MySql (SGBD relationnel)
 - Prisma ORM pour l'abstraction et les migrations
 
 **Configuration de connexion :**
@@ -413,7 +413,7 @@ Base de Données (MySql)
 2. Installer Node.js et npm
 3. Installer les dépendances : `npm install` (backend et frontend)
 4. Configurer les variables d'environnement (.env)
-5. Configurer la base de données PostgreSQL
+5. Configurer la base de données MySql
 6. Exécuter les migrations Prisma
 7. Lancer le serveur backend : `npm run dev`
 8. Lancer le frontend : `npm run dev`
@@ -467,7 +467,7 @@ Documentation automatique via Swagger accessible à `/api` en développement.
 
 1. **Préparation de l'environnement :**
    - Configuration des variables d'environnement de production
-   - Mise en place de la base de données PostgreSQL
+   - Mise en place de la base de données MySql
    - Configuration du serveur web (nginx/apache)
 
 2. **Installation des dépendances :**
